@@ -24,11 +24,11 @@ func (b *failingBackend) Search(string, []float32, int) ([]memory.SearchResult, 
 }
 
 func TestCreateMemoryMasksInternalStoreErrors(t *testing.T) {
-	store, err := memory.NewStore(&failingBackend{})
+	service, err := memory.NewService(&failingBackend{})
 	if err != nil {
-		t.Fatalf("new store: %v", err)
+		t.Fatalf("new service: %v", err)
 	}
-	server := NewServer(store)
+	server := NewServer(service)
 
 	body := `{"id":"memory-1","agent_id":"agent-1","content":"content","embedding":[0,1,2,3]}`
 	req := httptest.NewRequest("POST", "/api/v1/memories", strings.NewReader(body))
@@ -46,11 +46,11 @@ func TestCreateMemoryMasksInternalStoreErrors(t *testing.T) {
 }
 
 func TestSearchMemoryRejectsLimitAboveMaximum(t *testing.T) {
-	store, err := memory.NewStore(&failingBackend{})
+	service, err := memory.NewService(&failingBackend{})
 	if err != nil {
-		t.Fatalf("new store: %v", err)
+		t.Fatalf("new service: %v", err)
 	}
-	server := NewServer(store)
+	server := NewServer(service)
 
 	body := `{"agent_id":"agent-1","embedding":[0,1,2,3],"limit":101}`
 	req := httptest.NewRequest("POST", "/api/v1/memories/search", strings.NewReader(body))

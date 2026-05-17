@@ -18,13 +18,13 @@ func Run() error {
 		return fmt.Errorf("open memory store: %w", err)
 	}
 
-	store, err := memory.NewStore(backend)
+	memoryService, err := memory.NewService(backend)
 	if err != nil {
-		return fmt.Errorf("create memory store: %w", err)
+		return fmt.Errorf("create memory service: %w", err)
 	}
-	defer store.Close()
+	defer memoryService.Close()
 
-	server := transporthttp.NewServer(store)
+	server := transporthttp.NewServer(memoryService)
 	log.Printf("agent-cortex HTTP server listening on %s", cfg.Addr)
 	if err := server.Run(cfg.Addr); err != nil {
 		return fmt.Errorf("run HTTP server: %w", err)

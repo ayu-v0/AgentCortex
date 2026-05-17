@@ -26,7 +26,7 @@ type searchMemoryRequest struct {
 	Limit     int       `json:"limit" binding:"omitempty,min=1,max=100"`
 }
 
-func NewServer(store *memory.Store) *Server {
+func NewServer(service *memory.Service) *Server {
 	router := gin.Default()
 
 	router.GET("/health", func(c *gin.Context) {
@@ -34,8 +34,8 @@ func NewServer(store *memory.Store) *Server {
 	})
 
 	api := router.Group("/api/v1")
-	api.POST("/memories", createMemoryHandler(store))
-	api.POST("/memories/search", searchMemoryHandler(store))
+	api.POST("/memories", createMemoryHandler(service))
+	api.POST("/memories/search", searchMemoryHandler(service))
 
 	return &Server{router: router}
 }
@@ -44,7 +44,7 @@ func (s *Server) Run(addr string) error {
 	return s.router.Run(addr)
 }
 
-func createMemoryHandler(store *memory.Store) gin.HandlerFunc {
+func createMemoryHandler(service *memory.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req createMemoryRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -52,7 +52,7 @@ func createMemoryHandler(store *memory.Store) gin.HandlerFunc {
 			return
 		}
 
-		err := store.Save(memory.Memory{
+		err := service.Save(memory.Memory{
 			ID:        req.ID,
 			AgentID:   req.AgentID,
 			Content:   req.Content,
@@ -67,7 +67,7 @@ func createMemoryHandler(store *memory.Store) gin.HandlerFunc {
 	}
 }
 
-func searchMemoryHandler(store *memory.Store) gin.HandlerFunc {
+func searchMemoryHandler(service *memory.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req searchMemoryRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -75,7 +75,7 @@ func searchMemoryHandler(store *memory.Store) gin.HandlerFunc {
 			return
 		}
 
-		results, err := store.Search(req.AgentID, req.Embedding, req.Limit)
+		results, err := service.Search(req.AgentID, req.Embedding, req.Limit)
 		if err != nil {
 			writeStoreError(c, err)
 			return
