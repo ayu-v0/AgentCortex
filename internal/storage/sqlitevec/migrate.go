@@ -1,6 +1,6 @@
 package sqlitevec
 
-func (s *Store) migrate() error {
-	_, err := s.db.Exec(schemaSQL)
+func (b *Backend) migrate() error {
+	_, err := b.db.Exec(schemaSQL)
 	return err
 }
