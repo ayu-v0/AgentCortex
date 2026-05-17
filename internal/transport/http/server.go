@@ -2,6 +2,7 @@ package http
 
 import (
 	"errors"
+	"log"
 	stdhttp "net/http"
 
 	"github.com/ayu-v0/agent-cortex/internal/memory"
@@ -22,7 +23,7 @@ type createMemoryRequest struct {
 type searchMemoryRequest struct {
 	AgentID   string    `json:"agent_id" binding:"required"`
 	Embedding []float32 `json:"embedding" binding:"required"`
-	Limit     int       `json:"limit"`
+	Limit     int       `json:"limit" binding:"omitempty,min=1,max=100"`
 }
 
 func NewServer(store *memory.Store) *Server {
@@ -85,10 +86,11 @@ func searchMemoryHandler(store *memory.Store) gin.HandlerFunc {
 }
 
 func writeStoreError(c *gin.Context, err error) {
-	if errors.Is(err, memory.ErrInvalidEmbedding) {
+	if errors.Is(err, memory.ErrInvalidEmbedding) || errors.Is(err, memory.ErrInvalidEmbeddingValue) {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+	log.Printf("store error: %v", err)
+	c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": "internal server error"})
 }
