@@ -12,7 +12,7 @@ const (
 	ProviderStatic   ProviderType = "static"
 	ProviderLlamaCPP ProviderType = "llama.cpp"
 
-	defaultProvider = ProviderStatic
+	defaultProvider = ProviderLlamaCPP
 )
 
 const DefaultLlamaCPPModel = "ggml-org/embeddinggemma-300m-qat-q8_0-GGUF"
