@@ -76,3 +76,33 @@ func TestCreateMarkdownFileDoesNotOverwriteExistingFile(t *testing.T) {
 		t.Fatalf("expected original content to remain, got %q", string(content))
 	}
 }
+
+func TestAppendMarkdownFileAppendsContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.md")
+	if err := os.WriteFile(path, []byte("first\n"), 0o644); err != nil {
+		t.Fatalf("write markdown file: %v", err)
+	}
+
+	appendedPath, err := AppendMarkdownFile(dir, "note.md", "second\n")
+	if err != nil {
+		t.Fatalf("append markdown file: %v", err)
+	}
+	if appendedPath != path {
+		t.Fatalf("expected appended path under dir, got %q", appendedPath)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read markdown file: %v", err)
+	}
+	if string(content) != "first\nsecond\n" {
+		t.Fatalf("expected appended content, got %q", string(content))
+	}
+}
+
+func TestAppendMarkdownFileRejectsMissingFile(t *testing.T) {
+	if _, err := AppendMarkdownFile(t.TempDir(), "missing.md", "content"); err == nil {
+		t.Fatal("expected missing markdown file to be rejected")
+	}
+}

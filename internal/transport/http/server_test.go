@@ -160,11 +160,11 @@ func TestCreateMemoryMasksInternalStoreErrors(t *testing.T) {
 	}
 }
 
-func TestCreateMemoryDoesNotOverwriteExistingMarkdown(t *testing.T) {
+func TestCreateMemoryAppendsExistingMarkdown(t *testing.T) {
 	backend := &recordingBackend{}
 	markdownDir := t.TempDir()
 	markdownPath := filepath.Join(markdownDir, "user-1_agent-1_Memory.md")
-	if err := os.WriteFile(markdownPath, []byte("existing"), 0o644); err != nil {
+	if err := os.WriteFile(markdownPath, []byte("existing\n"), 0o644); err != nil {
 		t.Fatalf("write existing markdown: %v", err)
 	}
 	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
@@ -179,8 +179,14 @@ func TestCreateMemoryDoesNotOverwriteExistingMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read existing markdown: %v", err)
 	}
-	if string(content) != "existing" {
-		t.Fatalf("expected existing markdown to remain, got %q", string(content))
+	markdown := string(content)
+	if !strings.HasPrefix(markdown, "existing\n") {
+		t.Fatalf("expected existing markdown content to remain, got %q", markdown)
+	}
+	for _, expected := range []string{"MemoryID: memory-1", "## Question", "question", "## Answer", "answer"} {
+		if !strings.Contains(markdown, expected) {
+			t.Fatalf("expected appended markdown to contain %q, got %q", expected, markdown)
+		}
 	}
 }
 
@@ -244,6 +250,17 @@ func TestCreateMemoryTreatsConcurrentMarkdownCreateAsSuccess(t *testing.T) {
 	for _, expected := range []string{"UserID: user-1", "AgentID: agent-1", "## Question", "## Answer"} {
 		if !strings.Contains(markdown, expected) {
 			t.Fatalf("expected markdown to contain %q, got %q", expected, markdown)
+		}
+	}
+	for i := 0; i < requestCount; i++ {
+		for _, expected := range []string{
+			fmt.Sprintf("MemoryID: memory-%d", i),
+			fmt.Sprintf("question-%d", i),
+			fmt.Sprintf("answer-%d", i),
+		} {
+			if !strings.Contains(markdown, expected) {
+				t.Fatalf("expected markdown to contain %q, got %q", expected, markdown)
+			}
 		}
 	}
 }

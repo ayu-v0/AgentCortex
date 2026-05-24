@@ -7,6 +7,7 @@ import (
 	stdhttp "net/http"
 	"os"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/ayu-v0/agent-cortex/internal/memory"
@@ -19,6 +20,7 @@ const defaultMemoryMarkdownDir = ".memory"
 type handlers struct {
 	memoryService     *memory.Service
 	memoryMarkdownDir string
+	memoryMarkdownMu  sync.Mutex
 }
 
 func newHandlers(service *memory.Service, memoryMarkdownDir string) *handlers {
@@ -79,17 +81,26 @@ func (h *handlers) ensureMemoryMarkdown(req createMemoryRequest) error {
 		return err
 	}
 
+	h.memoryMarkdownMu.Lock()
+	defer h.memoryMarkdownMu.Unlock()
+
 	exists, err := utils.MarkdownFileExists(h.memoryMarkdownDir, filename)
 	if err != nil {
 		return fmt.Errorf("check memory markdown: %w", err)
 	}
 	if exists {
+		if _, err := utils.AppendMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownAppendContent(req)); err != nil {
+			return fmt.Errorf("append memory markdown: %w", err)
+		}
 		return nil
 	}
 
 	_, err = utils.CreateMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownContent(req))
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
+			if _, err := utils.AppendMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownAppendContent(req)); err != nil {
+				return fmt.Errorf("append memory markdown after concurrent create: %w", err)
+			}
 			return nil
 		}
 		return fmt.Errorf("create memory markdown: %w", err)
@@ -135,6 +146,17 @@ func memoryMarkdownContent(req createMemoryRequest) string {
 
 UserID: %s
 AgentID: %s
+
+%s`, req.UserID, req.AgentID, memoryMarkdownEntry(req))
+}
+
+func memoryMarkdownAppendContent(req createMemoryRequest) string {
+	return "\n---\n\n" + memoryMarkdownEntry(req)
+}
+
+func memoryMarkdownEntry(req createMemoryRequest) string {
+	return fmt.Sprintf(`## Memory
+
 MemoryID: %s
 
 ## Question
@@ -144,5 +166,5 @@ MemoryID: %s
 ## Answer
 
 %s
-`, req.UserID, req.AgentID, req.ID, req.Question, req.Answer)
+`, req.ID, req.Question, req.Answer)
 }

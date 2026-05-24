@@ -47,6 +47,25 @@ func CreateMarkdownFile(dir, filename, content string) (string, error) {
 	return path, nil
 }
 
+// AppendMarkdownFile appends content to an existing markdown file directly under dir.
+func AppendMarkdownFile(dir, filename, content string) (string, error) {
+	path, err := markdownFilePath(dir, filename)
+	if err != nil {
+		return "", err
+	}
+
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(content); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func markdownFilePath(dir, filename string) (string, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
