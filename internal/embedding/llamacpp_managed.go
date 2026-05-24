@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +35,16 @@ func NewManagedLlamaCPPEmbedder(ctx context.Context, config Config) (*ManagedLla
 }
 
 func newManagedLlamaCPPEmbedder(ctx context.Context, config Config, starter llamaCPPProcessStarter) (*ManagedLlamaCPPEmbedder, error) {
+	if strings.TrimSpace(config.LlamaCPPExecutablePath) == "" {
+		return nil, fmt.Errorf("%w: llama.cpp executable path is required", ErrInvalidConfig)
+	}
+
+	var err error
+	config, err = ensureLlamaCPPModel(ctx, config, downloadLlamaCPPModel)
+	if err != nil {
+		return nil, err
+	}
+
 	launch, err := newLlamaCPPLaunchConfig(config)
 	if err != nil {
 		return nil, err
@@ -71,6 +84,78 @@ type llamaCPPProcess interface {
 }
 
 type llamaCPPProcessStarter func(context.Context, llamaCPPLaunchConfig) (string, llamaCPPProcess, error)
+
+type llamaCPPModelDownloadConfig struct {
+	url  string
+	path string
+}
+
+type llamaCPPModelDownloader func(context.Context, llamaCPPModelDownloadConfig) (string, error)
+
+func ensureLlamaCPPModel(ctx context.Context, config Config, downloader llamaCPPModelDownloader) (Config, error) {
+	modelPath := strings.TrimSpace(config.LlamaCPPModelPath)
+	if modelPath == "" {
+		defaultPath, err := defaultLlamaCPPModelPath(config)
+		if err != nil {
+			return Config{}, err
+		}
+		modelPath = defaultPath
+	}
+
+	ready, err := llamaCPPModelFileReady(modelPath)
+	if err != nil {
+		return Config{}, err
+	}
+	if ready {
+		config.LlamaCPPModelPath = modelPath
+		return config, nil
+	}
+
+	modelURL := strings.TrimSpace(config.LlamaCPPModelURL)
+	if modelURL == "" {
+		modelURL = DefaultLlamaCPPModelURL
+	}
+
+	downloadedPath, err := downloader(ctx, llamaCPPModelDownloadConfig{
+		url:  modelURL,
+		path: modelPath,
+	})
+	if err != nil {
+		return Config{}, err
+	}
+
+	config.LlamaCPPModelPath = downloadedPath
+	return config, nil
+}
+
+func defaultLlamaCPPModelPath(config Config) (string, error) {
+	cacheDir := strings.TrimSpace(config.LlamaCPPModelCacheDir)
+	if cacheDir == "" {
+		userCacheDir, err := os.UserCacheDir()
+		if err != nil {
+			return "", fmt.Errorf("%w: resolve llama.cpp model cache dir: %v", ErrInvalidConfig, err)
+		}
+		cacheDir = filepath.Join(userCacheDir, "agent-cortex", "models")
+	}
+	return filepath.Join(cacheDir, DefaultLlamaCPPModelFile), nil
+}
+
+func llamaCPPModelFileReady(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err == nil {
+		if info.IsDir() {
+			return false, fmt.Errorf("%w: llama.cpp model path is a directory: %s", ErrInvalidConfig, path)
+		}
+		if info.Size() == 0 {
+			return false, fmt.Errorf("%w: llama.cpp model file is empty: %s", ErrInvalidConfig, path)
+		}
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("%w: inspect llama.cpp model path: %v", ErrInvalidConfig, err)
+}
 
 type llamaCPPLaunchConfig struct {
 	executable     string
@@ -144,6 +229,65 @@ func connectHost(host string) string {
 	default:
 		return host
 	}
+}
+
+func downloadLlamaCPPModel(ctx context.Context, download llamaCPPModelDownloadConfig) (string, error) {
+	modelURL := strings.TrimSpace(download.url)
+	if modelURL == "" {
+		return "", fmt.Errorf("%w: llama.cpp model download URL is required", ErrInvalidConfig)
+	}
+	modelPath := strings.TrimSpace(download.path)
+	if modelPath == "" {
+		return "", fmt.Errorf("%w: llama.cpp model path is required", ErrInvalidConfig)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(modelPath), 0o755); err != nil {
+		return "", fmt.Errorf("%w: create llama.cpp model directory: %v", ErrProviderUnavailable, err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("%w: create llama.cpp model download request: %v", ErrInvalidConfig, err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		return "", fmt.Errorf("%w: download llama.cpp model: %v", ErrProviderUnavailable, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("%w: download llama.cpp model status %d", ErrProviderUnavailable, resp.StatusCode)
+	}
+
+	tempFile, err := os.CreateTemp(filepath.Dir(modelPath), filepath.Base(modelPath)+".*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("%w: create llama.cpp model temp file: %v", ErrProviderUnavailable, err)
+	}
+	tempPath := tempFile.Name()
+	defer func() {
+		_ = os.Remove(tempPath)
+	}()
+
+	if _, err := io.Copy(tempFile, resp.Body); err != nil {
+		_ = tempFile.Close()
+		return "", fmt.Errorf("%w: write llama.cpp model: %v", ErrProviderUnavailable, err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return "", fmt.Errorf("%w: close llama.cpp model temp file: %v", ErrProviderUnavailable, err)
+	}
+
+	if err := os.Rename(tempPath, modelPath); err != nil {
+		if ready, statErr := llamaCPPModelFileReady(modelPath); statErr == nil && ready {
+			return modelPath, nil
+		}
+		return "", fmt.Errorf("%w: install llama.cpp model: %v", ErrProviderUnavailable, err)
+	}
+
+	return modelPath, nil
 }
 
 func startLlamaCPPProcess(parent context.Context, launch llamaCPPLaunchConfig) (string, llamaCPPProcess, error) {
