@@ -38,3 +38,24 @@ func TestStoreSavesValidMemory(t *testing.T) {
 		t.Fatalf("expected saved memory ID %q, got %q", expected.ID, backend.savedMemory.ID)
 	}
 }
+
+func TestStoreSavesMemoryWithoutEmbedding(t *testing.T) {
+	backend := &fakeBackend{}
+	store := newStore(backend)
+
+	expected := Memory{
+		ID:       "memory-1",
+		AgentID:  "agent-1",
+		UserID:   "user-1",
+		Question: "question",
+		Answer:   "answer",
+		Content:  "question\nanswer",
+	}
+
+	if err := store.Save(expected); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if backend.savedMemory.ID != expected.ID {
+		t.Fatalf("expected saved memory ID %q, got %q", expected.ID, backend.savedMemory.ID)
+	}
+}

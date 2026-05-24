@@ -7,6 +7,9 @@ const schemaSQL = `
 	CREATE TABLE IF NOT EXISTS memories (
 		id TEXT PRIMARY KEY,
 		agent_id TEXT NOT NULL,
+		user_id TEXT NOT NULL DEFAULT '',
+		question TEXT NOT NULL DEFAULT '',
+		answer TEXT NOT NULL DEFAULT '',
 		content TEXT NOT NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);

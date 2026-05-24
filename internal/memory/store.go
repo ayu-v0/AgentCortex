@@ -9,8 +9,10 @@ func newStore(backend Backend) *Store {
 }
 
 func (s *Store) Save(memory Memory) error {
-	if err := validateEmbedding(memory.Embedding); err != nil {
-		return err
+	if len(memory.Embedding) > 0 {
+		if err := validateEmbedding(memory.Embedding); err != nil {
+			return err
+		}
 	}
 
 	return s.backend.Save(memory)

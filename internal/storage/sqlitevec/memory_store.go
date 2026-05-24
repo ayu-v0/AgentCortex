@@ -26,9 +26,9 @@ func (s *MemoryStore) Save(item memory.Memory) error {
 	}()
 
 	_, err = tx.Exec(`
-		INSERT OR REPLACE INTO memories (id, agent_id, content)
-		VALUES (?, ?, ?)
-	`, item.ID, item.AgentID, item.Content)
+		INSERT OR REPLACE INTO memories (id, agent_id, user_id, question, answer, content)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, item.ID, item.AgentID, item.UserID, item.Question, item.Answer, item.Content)
 	if err != nil {
 		return err
 	}
@@ -37,6 +37,11 @@ func (s *MemoryStore) Save(item memory.Memory) error {
 		DELETE FROM memory_vectors
 		WHERE memory_id = ?
 	`, item.ID); err != nil {
+		return err
+	}
+
+	if len(item.Embedding) == 0 {
+		err = tx.Commit()
 		return err
 	}
 

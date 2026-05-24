@@ -10,7 +10,11 @@ type Server struct {
 }
 
 func NewServer(service *memory.Service) *Server {
-	handlers := newHandlers(service)
+	return newServer(service, defaultMemoryMarkdownDir)
+}
+
+func newServer(service *memory.Service, memoryMarkdownDir string) *Server {
+	handlers := newHandlers(service, memoryMarkdownDir)
 	return &Server{router: newRouter(handlers)}
 }
 
