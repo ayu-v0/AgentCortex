@@ -5,7 +5,7 @@ import "reflect"
 type Backend interface {
 	Close() error
 	Save(memory Memory) error
-	Search(agentID string, embedding []float32, limit int) ([]SearchResult, error)
+	Search(agentID string, userID string, embedding []float32, limit int) ([]SearchResult, error)
 }
 
 type Service struct {
@@ -34,8 +34,8 @@ func (s *Service) Save(memory Memory) error {
 	return s.store.Save(memory)
 }
 
-func (s *Service) Search(agentID string, embedding []float32, limit int) ([]SearchResult, error) {
-	return s.query.Search(agentID, embedding, limit)
+func (s *Service) Search(agentID string, userID string, embedding []float32, limit int) ([]SearchResult, error) {
+	return s.query.Search(agentID, userID, embedding, limit)
 }
 
 func isNilBackend(backend Backend) bool {

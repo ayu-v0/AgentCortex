@@ -6,9 +6,11 @@ import (
 )
 
 type fakeBackend struct {
-	closed      bool
-	savedMemory Memory
-	searchLimit int
+	closed        bool
+	savedMemory   Memory
+	searchAgentID string
+	searchUserID  string
+	searchLimit   int
 }
 
 func (b *fakeBackend) Close() error {
@@ -21,7 +23,9 @@ func (b *fakeBackend) Save(memory Memory) error {
 	return nil
 }
 
-func (b *fakeBackend) Search(agentID string, embedding []float32, limit int) ([]SearchResult, error) {
+func (b *fakeBackend) Search(agentID string, userID string, embedding []float32, limit int) ([]SearchResult, error) {
+	b.searchAgentID = agentID
+	b.searchUserID = userID
 	b.searchLimit = limit
 	return nil, nil
 }
@@ -45,6 +49,28 @@ func TestServiceCloseClosesBackend(t *testing.T) {
 	}
 	if !backend.closed {
 		t.Fatal("expected backend to be closed")
+	}
+}
+
+func TestServiceSearchForwardsUserAndDefaultLimit(t *testing.T) {
+	backend := &fakeBackend{}
+	service, err := NewService(backend)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	_, err = service.Search("agent-1", "user-1", validEmbedding(), 0)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if backend.searchAgentID != "agent-1" {
+		t.Fatalf("expected search agent ID agent-1, got %q", backend.searchAgentID)
+	}
+	if backend.searchUserID != "user-1" {
+		t.Fatalf("expected search user ID user-1, got %q", backend.searchUserID)
+	}
+	if backend.searchLimit != 10 {
+		t.Fatalf("expected default search limit 10, got %d", backend.searchLimit)
 	}
 }
 

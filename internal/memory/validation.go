@@ -8,7 +8,7 @@ import (
 const EmbeddingDimensions = 4
 
 const (
-	defaultSearchLimit = 5
+	defaultSearchLimit = 10
 	MaxSearchLimit     = 100
 )
 

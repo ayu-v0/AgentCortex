@@ -8,10 +8,10 @@ func newQuery(backend Backend) *Query {
 	return &Query{backend: backend}
 }
 
-func (q *Query) Search(agentID string, embedding []float32, limit int) ([]SearchResult, error) {
+func (q *Query) Search(agentID string, userID string, embedding []float32, limit int) ([]SearchResult, error) {
 	if err := validateEmbedding(embedding); err != nil {
 		return nil, err
 	}
 
-	return q.backend.Search(agentID, embedding, normalizeSearchLimit(limit))
+	return q.backend.Search(agentID, userID, embedding, normalizeSearchLimit(limit))
 }
