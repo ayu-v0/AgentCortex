@@ -1,6 +1,7 @@
 package http
 
 import (
+	"github.com/ayu-v0/agent-cortex/internal/embedding"
 	"github.com/ayu-v0/agent-cortex/internal/memory"
 	"github.com/gin-gonic/gin"
 )
@@ -9,12 +10,12 @@ type Server struct {
 	router *gin.Engine
 }
 
-func NewServer(service *memory.Service) *Server {
-	return newServer(service, defaultMemoryMarkdownDir)
+func NewServer(service *memory.Service, embedder embedding.Embedder) *Server {
+	return newServer(service, embedder, defaultMemoryMarkdownDir)
 }
 
-func newServer(service *memory.Service, memoryMarkdownDir string) *Server {
-	handlers := newHandlers(service, memoryMarkdownDir)
+func newServer(service *memory.Service, embedder embedding.Embedder, memoryMarkdownDir string) *Server {
+	handlers := newHandlers(service, embedder, memoryMarkdownDir)
 	return &Server{router: newRouter(handlers)}
 }
 

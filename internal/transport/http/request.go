@@ -28,7 +28,15 @@ func (r createMemoryRequest) toMemory() memory.Memory {
 }
 
 type searchMemoryRequest struct {
-	AgentID   string    `json:"agent_id" binding:"required"`
-	Embedding []float32 `json:"embedding" binding:"required"`
-	Limit     int       `json:"limit" binding:"omitempty,min=1,max=100"`
+	AgentID  string `json:"agent_id" binding:"required"`
+	UserID   string `json:"user_id" binding:"required"`
+	Question string `json:"question" binding:"required"`
+	Limit    *int   `json:"limit" binding:"omitempty,min=1,max=100"`
+}
+
+func (r searchMemoryRequest) searchLimit() int {
+	if r.Limit == nil {
+		return 0
+	}
+	return *r.Limit
 }

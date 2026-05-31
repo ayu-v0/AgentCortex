@@ -6,10 +6,12 @@ import (
 	"log"
 	stdhttp "net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"unicode"
 
+	"github.com/ayu-v0/agent-cortex/internal/embedding"
 	"github.com/ayu-v0/agent-cortex/internal/memory"
 	"github.com/ayu-v0/agent-cortex/internal/utils"
 	"github.com/gin-gonic/gin"
@@ -19,17 +21,19 @@ const defaultMemoryMarkdownDir = ".memory"
 
 type handlers struct {
 	memoryService     *memory.Service
+	embedder          embedding.Embedder
 	memoryMarkdownDir string
 	memoryMarkdownMu  sync.Mutex
 }
 
-func newHandlers(service *memory.Service, memoryMarkdownDir string) *handlers {
+func newHandlers(service *memory.Service, embedder embedding.Embedder, memoryMarkdownDir string) *handlers {
 	memoryMarkdownDir = strings.TrimSpace(memoryMarkdownDir)
 	if memoryMarkdownDir == "" {
 		memoryMarkdownDir = defaultMemoryMarkdownDir
 	}
 	return &handlers{
 		memoryService:     service,
+		embedder:          embedder,
 		memoryMarkdownDir: memoryMarkdownDir,
 	}
 }
@@ -66,13 +70,72 @@ func (h *handlers) searchMemory(c *gin.Context) {
 		return
 	}
 
-	results, err := h.memoryService.Search(req.AgentID, req.Embedding, req.Limit)
+	vector, err := h.embedder.Embed(c.Request.Context(), embedding.Input{Text: req.Question})
 	if err != nil {
 		writeHTTPError(c, err)
 		return
 	}
 
+	results, err := h.memoryService.Search(req.AgentID, req.UserID, []float32(vector), req.searchLimit())
+	if err != nil {
+		writeHTTPError(c, err)
+		return
+	}
+	if len(results) > 0 {
+		if err := h.replaceSearchContentFromMarkdown(req.UserID, req.AgentID, results); err != nil {
+			log.Printf("memory markdown search error: %v", err)
+			writeErrorJSON(c, stdhttp.StatusInternalServerError, "internal server error")
+			return
+		}
+	}
+
 	writeJSON(c, stdhttp.StatusOK, searchMemoryResponse{Results: results})
+}
+
+func (h *handlers) replaceSearchContentFromMarkdown(userID, agentID string, results []memory.SearchResult) error {
+	filename, err := memoryMarkdownFilename(userID, agentID)
+	if err != nil {
+		return err
+	}
+
+	content, err := os.ReadFile(filepath.Join(h.memoryMarkdownDir, filename))
+	if err != nil {
+		return fmt.Errorf("read memory markdown: %w", err)
+	}
+
+	entries := memoryMarkdownEntriesByID(string(content))
+	for i := range results {
+		if entry, ok := entries[results[i].ID]; ok {
+			results[i].Content = entry
+		}
+	}
+	return nil
+}
+
+func memoryMarkdownEntriesByID(content string) map[string]string {
+	entries := make(map[string]string)
+	for _, chunk := range strings.Split(content, "\n---\n") {
+		entry := strings.TrimSpace(chunk)
+		if start := strings.Index(entry, "## Memory\n"); start >= 0 {
+			entry = entry[start:]
+		}
+		id, ok := memoryIDFromMarkdownEntry(entry)
+		if ok {
+			entries[id] = entry
+		}
+	}
+	return entries
+}
+
+func memoryIDFromMarkdownEntry(entry string) (string, bool) {
+	for _, line := range strings.Split(entry, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "MemoryID:") {
+			id := strings.TrimSpace(strings.TrimPrefix(line, "MemoryID:"))
+			return id, id != ""
+		}
+	}
+	return "", false
 }
 
 func (h *handlers) ensureMemoryMarkdown(req createMemoryRequest) error {

@@ -14,7 +14,7 @@ func newQuery(db *sql.DB) *Query {
 	return &Query{db: db}
 }
 
-func (q *Query) Search(agentID string, embedding []float32, limit int) ([]memory.SearchResult, error) {
+func (q *Query) Search(agentID string, userID string, embedding []float32, limit int) ([]memory.SearchResult, error) {
 	rows, err := q.db.Query(`
 		SELECT
 			m.id,
@@ -24,9 +24,10 @@ func (q *Query) Search(agentID string, embedding []float32, limit int) ([]memory
 		JOIN memories m ON m.id = v.memory_id
 		WHERE v.embedding MATCH ?
 		  AND k = ?
-		  AND m.agent_id = ?
+		  AND v.agent_id = ?
+		  AND v.user_id = ?
 		ORDER BY v.distance
-	`, float32VectorToBytes(embedding), limit, agentID)
+	`, float32VectorToBytes(embedding), limit, agentID, userID)
 	if err != nil {
 		return nil, err
 	}

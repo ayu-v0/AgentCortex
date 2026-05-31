@@ -13,9 +13,13 @@ const schemaSQL = `
 		content TEXT NOT NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
+`
 
+const memoryVectorsSchemaSQL = `
 	CREATE VIRTUAL TABLE IF NOT EXISTS memory_vectors USING vec0(
 		memory_id TEXT PRIMARY KEY,
+		agent_id TEXT partition key,
+		user_id TEXT partition key,
 		embedding FLOAT[4]
 	);
 `

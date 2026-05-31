@@ -51,6 +51,6 @@ func (b *Backend) Save(item memory.Memory) error {
 	return b.memoryStore.Save(item)
 }
 
-func (b *Backend) Search(agentID string, embedding []float32, limit int) ([]memory.SearchResult, error) {
-	return b.query.Search(agentID, embedding, limit)
+func (b *Backend) Search(agentID string, userID string, embedding []float32, limit int) ([]memory.SearchResult, error) {
+	return b.query.Search(agentID, userID, embedding, limit)
 }

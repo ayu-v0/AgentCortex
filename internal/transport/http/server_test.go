@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	stdhttp "net/http"
@@ -11,8 +12,26 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ayu-v0/agent-cortex/internal/embedding"
 	"github.com/ayu-v0/agent-cortex/internal/memory"
 )
+
+type fakeEmbedder struct {
+	input  string
+	vector embedding.Vector
+	err    error
+}
+
+func (e *fakeEmbedder) Embed(ctx context.Context, input embedding.Input) (embedding.Vector, error) {
+	e.input = input.Text
+	if e.err != nil {
+		return nil, e.err
+	}
+	if e.vector != nil {
+		return e.vector, nil
+	}
+	return embedding.Vector{0, 1, 2, 3}, nil
+}
 
 type failingBackend struct{}
 
@@ -24,13 +43,17 @@ func (b *failingBackend) Save(memory.Memory) error {
 	return errors.New("sqlite secret path")
 }
 
-func (b *failingBackend) Search(string, []float32, int) ([]memory.SearchResult, error) {
+func (b *failingBackend) Search(string, string, []float32, int) ([]memory.SearchResult, error) {
 	return nil, errors.New("sqlite secret path")
 }
 
 type recordingBackend struct {
-	saved       memory.Memory
-	searchLimit int
+	saved           memory.Memory
+	searchAgentID   string
+	searchUserID    string
+	searchEmbedding []float32
+	searchLimit     int
+	searchResults   []memory.SearchResult
 }
 
 func (b *recordingBackend) Close() error {
@@ -42,10 +65,16 @@ func (b *recordingBackend) Save(saved memory.Memory) error {
 	return nil
 }
 
-func (b *recordingBackend) Search(agentID string, embedding []float32, limit int) ([]memory.SearchResult, error) {
+func (b *recordingBackend) Search(agentID string, userID string, embedding []float32, limit int) ([]memory.SearchResult, error) {
+	b.searchAgentID = agentID
+	b.searchUserID = userID
+	b.searchEmbedding = embedding
 	b.searchLimit = limit
+	if b.searchResults != nil {
+		return b.searchResults, nil
+	}
 	return []memory.SearchResult{
-		{ID: "memory-1", Content: "content", Distance: 0.25},
+		{ID: "memory-1", Content: "database content", Distance: 0.25},
 	}, nil
 }
 
@@ -64,7 +93,7 @@ func (b *concurrentCreateBackend) Save(memory.Memory) error {
 	return nil
 }
 
-func (b *concurrentCreateBackend) Search(string, []float32, int) ([]memory.SearchResult, error) {
+func (b *concurrentCreateBackend) Search(string, string, []float32, int) ([]memory.SearchResult, error) {
 	return nil, nil
 }
 
@@ -284,7 +313,7 @@ func TestCreateMemorySanitizesMarkdownFilename(t *testing.T) {
 func TestSearchMemoryRejectsLimitAboveMaximum(t *testing.T) {
 	server := newTestServer(t, &failingBackend{})
 
-	body := `{"agent_id":"agent-1","embedding":[0,1,2,3],"limit":101}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","question":"question","limit":101}`
 	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
 
 	if recorder.Code != stdhttp.StatusBadRequest {
@@ -292,27 +321,171 @@ func TestSearchMemoryRejectsLimitAboveMaximum(t *testing.T) {
 	}
 }
 
-func TestSearchMemoryReturnsResults(t *testing.T) {
-	backend := &recordingBackend{}
-	server := newTestServer(t, backend)
+func TestSearchMemoryRejectsExplicitZeroLimit(t *testing.T) {
+	server := newTestServer(t, &failingBackend{})
 
-	body := `{"agent_id":"agent-1","embedding":[0,1,2,3],"limit":10}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","question":"question","limit":0}`
+	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
+
+	if recorder.Code != stdhttp.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", recorder.Code)
+	}
+}
+
+func TestSearchMemoryRejectsMissingQuestion(t *testing.T) {
+	server := newTestServer(t, &failingBackend{})
+
+	body := `{"agent_id":"agent-1","user_id":"user-1"}`
+	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
+
+	if recorder.Code != stdhttp.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", recorder.Code)
+	}
+}
+
+func TestSearchMemoryEmbedsQuestionAndForwardsRequest(t *testing.T) {
+	backend := &recordingBackend{}
+	embedder := &fakeEmbedder{vector: embedding.Vector{4, 5, 6, 7}}
+	markdownDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(markdownDir, "user-1_agent-1_Memory.md"), []byte("MemoryID: other-memory\n"), 0o644); err != nil {
+		t.Fatalf("write markdown: %v", err)
+	}
+	server := newTestServerWithMarkdownDirAndEmbedder(t, backend, markdownDir, embedder)
+
+	body := `{"agent_id":"agent-1","user_id":"user-1","question":"where is it?"}`
 	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
 
 	if recorder.Code != stdhttp.StatusOK {
 		t.Fatalf("expected status 200, got %d", recorder.Code)
 	}
-	if !strings.Contains(recorder.Body.String(), `"results":[{"id":"memory-1","content":"content","distance":0.25}]`) {
+	if !strings.Contains(recorder.Body.String(), `"results":[{"id":"memory-1","content":"database content","distance":0.25}]`) {
 		t.Fatalf("unexpected body: %s", recorder.Body.String())
+	}
+	if embedder.input != "where is it?" {
+		t.Fatalf("expected embedded question, got %q", embedder.input)
+	}
+	if backend.searchAgentID != "agent-1" {
+		t.Fatalf("expected search agent ID agent-1, got %q", backend.searchAgentID)
+	}
+	if backend.searchUserID != "user-1" {
+		t.Fatalf("expected search user ID user-1, got %q", backend.searchUserID)
 	}
 	if backend.searchLimit != 10 {
 		t.Fatalf("expected search limit 10, got %d", backend.searchLimit)
+	}
+	if fmt.Sprint(backend.searchEmbedding) != "[4 5 6 7]" {
+		t.Fatalf("expected generated embedding, got %v", backend.searchEmbedding)
+	}
+}
+
+func TestSearchMemoryReplacesDatabaseContentFromMarkdownEntry(t *testing.T) {
+	backend := &recordingBackend{
+		searchResults: []memory.SearchResult{
+			{ID: "memory-2", Content: "database content 2", Distance: 0.1},
+			{ID: "memory-1", Content: "database content 1", Distance: 0.2},
+			{ID: "memory-3", Content: "database content 3", Distance: 0.3},
+		},
+	}
+	markdownDir := t.TempDir()
+	markdownPath := filepath.Join(markdownDir, "user-1_agent-1_Memory.md")
+	markdown := `# Memory
+
+UserID: user-1
+AgentID: agent-1
+
+## Memory
+
+MemoryID: memory-1
+
+## Question
+
+first question
+
+## Answer
+
+first answer
+
+---
+
+## Memory
+
+MemoryID: memory-2
+
+## Question
+
+second question
+
+## Answer
+
+second answer
+`
+	if err := os.WriteFile(markdownPath, []byte(markdown), 0o644); err != nil {
+		t.Fatalf("write markdown: %v", err)
+	}
+	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
+
+	body := `{"agent_id":"agent-1","user_id":"user-1","question":"question","limit":3}`
+	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
+
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	bodyText := recorder.Body.String()
+	for _, expected := range []string{
+		`{"id":"memory-2","content":"## Memory\n\nMemoryID: memory-2`,
+		`"distance":0.1}`,
+		`{"id":"memory-1","content":"## Memory\n\nMemoryID: memory-1`,
+		`"distance":0.2}`,
+		`{"id":"memory-3","content":"database content 3","distance":0.3}`,
+	} {
+		if !strings.Contains(bodyText, expected) {
+			t.Fatalf("expected response to contain %q, got %s", expected, bodyText)
+		}
+	}
+}
+
+func TestSearchMemoryReturnsEmptyResultsWithoutReadingMarkdown(t *testing.T) {
+	backend := &recordingBackend{searchResults: []memory.SearchResult{}}
+	server := newTestServer(t, backend)
+
+	body := `{"agent_id":"agent-1","user_id":"user-1","question":"question"}`
+	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
+
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	if strings.TrimSpace(recorder.Body.String()) != `{"results":[]}` {
+		t.Fatalf("unexpected body: %s", recorder.Body.String())
+	}
+}
+
+func TestSearchMemoryMasksMissingMarkdownFile(t *testing.T) {
+	backend := &recordingBackend{}
+	server := newTestServer(t, backend)
+
+	body := `{"agent_id":"agent-1","user_id":"user-1","question":"question"}`
+	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
+
+	if recorder.Code != stdhttp.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d", recorder.Code)
+	}
+	if strings.Contains(recorder.Body.String(), "user-1_agent-1_Memory.md") {
+		t.Fatalf("response leaked markdown path: %s", recorder.Body.String())
 	}
 }
 
 func TestStatusFromErrorMapsMemoryValidationErrors(t *testing.T) {
 	if status := statusFromError(memory.ErrInvalidEmbedding); status != stdhttp.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", status)
+	}
+	if status := statusFromError(embedding.ErrEmptyInput); status != stdhttp.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", status)
+	}
+	if status := statusFromError(embedding.ErrInvalidVector); status != stdhttp.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", status)
+	}
+	if status := statusFromError(embedding.ErrProviderUnavailable); status != stdhttp.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d", status)
 	}
 	if status := statusFromError(errors.New("unknown")); status != stdhttp.StatusInternalServerError {
 		t.Fatalf("expected status 500, got %d", status)
@@ -328,11 +501,23 @@ func newTestServer(t *testing.T, backend memory.Backend) *Server {
 func newTestServerWithMarkdownDir(t *testing.T, backend memory.Backend, markdownDir string) *Server {
 	t.Helper()
 
+	return newTestServerWithMarkdownDirAndEmbedder(t, backend, markdownDir, &fakeEmbedder{})
+}
+
+func newTestServerWithEmbedder(t *testing.T, backend memory.Backend, embedder embedding.Embedder) *Server {
+	t.Helper()
+
+	return newTestServerWithMarkdownDirAndEmbedder(t, backend, t.TempDir(), embedder)
+}
+
+func newTestServerWithMarkdownDirAndEmbedder(t *testing.T, backend memory.Backend, markdownDir string, embedder embedding.Embedder) *Server {
+	t.Helper()
+
 	service, err := memory.NewService(backend)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
-	return newServer(service, markdownDir)
+	return newServer(service, embedder, markdownDir)
 }
 
 func performRequest(server *Server, method, path, body string) *httptest.ResponseRecorder {

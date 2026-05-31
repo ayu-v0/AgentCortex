@@ -46,9 +46,9 @@ func (s *MemoryStore) Save(item memory.Memory) error {
 	}
 
 	_, err = tx.Exec(`
-		INSERT INTO memory_vectors (memory_id, embedding)
-		VALUES (?, ?)
-	`, item.ID, float32VectorToBytes(item.Embedding))
+		INSERT INTO memory_vectors (memory_id, agent_id, user_id, embedding)
+		VALUES (?, ?, ?, ?)
+	`, item.ID, item.AgentID, item.UserID, float32VectorToBytes(item.Embedding))
 	if err != nil {
 		return err
 	}

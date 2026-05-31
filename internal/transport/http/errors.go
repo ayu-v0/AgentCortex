@@ -5,6 +5,7 @@ import (
 	"log"
 	stdhttp "net/http"
 
+	"github.com/ayu-v0/agent-cortex/internal/embedding"
 	"github.com/ayu-v0/agent-cortex/internal/memory"
 	"github.com/gin-gonic/gin"
 )
@@ -21,7 +22,10 @@ func writeHTTPError(c *gin.Context, err error) {
 func statusFromError(err error) int {
 	switch {
 	case errors.Is(err, memory.ErrInvalidEmbedding),
-		errors.Is(err, memory.ErrInvalidEmbeddingValue):
+		errors.Is(err, memory.ErrInvalidEmbeddingValue),
+		errors.Is(err, embedding.ErrEmptyInput),
+		errors.Is(err, embedding.ErrInvalidVector),
+		errors.Is(err, embedding.ErrInvalidVectorValue):
 		return stdhttp.StatusBadRequest
 	default:
 		return stdhttp.StatusInternalServerError
