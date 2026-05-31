@@ -10,6 +10,7 @@ go run .\cmd\agent-cortex
 ```
 
 The service listens on `:8080` by default. Set `ADDR` or `DATABASE_PATH` to override the listen address or SQLite database path.
+Set `EMBEDDING_PROVIDER` or `EMBEDDING_ENDPOINT` to override the search embedding provider or endpoint.
 
 ### Health
 
@@ -26,7 +27,9 @@ Content-Type: application/json
 {
   "id": "mem_001",
   "agent_id": "agent_001",
-  "content": "User likes building agent memory in Go.",
+  "user_id": "user_001",
+  "question": "What does the user like?",
+  "answer": "The user likes building agent memory in Go.",
   "embedding": [0.1, 0.2, 0.3, 0.4]
 }
 ```
@@ -39,7 +42,8 @@ Content-Type: application/json
 
 {
   "agent_id": "agent_001",
-  "embedding": [0.1, 0.2, 0.3, 0.4],
-  "limit": 5
+  "user_id": "user_001",
+  "question": "What does the user like?",
+  "limit": 10
 }
 ```
