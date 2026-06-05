@@ -9,6 +9,10 @@ type Client interface {
 	Generate(ctx context.Context, request Request) (Response, error)
 }
 
+type Streamer interface {
+	Stream(ctx context.Context, request Request) (<-chan StreamEvent, error)
+}
+
 type Role string
 
 const (
@@ -72,4 +76,21 @@ type ToolCall struct {
 	ID        string
 	Name      string
 	Arguments json.RawMessage
+}
+
+type StreamEvent struct {
+	TextDelta     string
+	ToolCallDelta *ToolCallDelta
+	FinishReason  string
+	Model         string
+	Usage         Usage
+	RawID         string
+	Err           error
+}
+
+type ToolCallDelta struct {
+	Index          int
+	ID             string
+	Name           string
+	ArgumentsDelta string
 }

@@ -272,6 +272,107 @@ func TestOpenAICompatibleGenerateReturnsCanceledContext(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleStreamSendsStreamRequestAndParsesTextDeltas(t *testing.T) {
+	var gotRequest openAICompatibleChatRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("expected /v1/chat/completions, got %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotRequest); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-stream\",\"model\":\"test-model\",\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-stream\",\"model\":\"test-model\",\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := newTestOpenAICompatibleClient(t, server.URL)
+	events, err := client.Stream(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "hello"}}})
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	collected := collectStreamEvents(t, events)
+
+	if !gotRequest.Stream {
+		t.Fatalf("expected stream request flag")
+	}
+	if len(collected) != 2 {
+		t.Fatalf("expected two events, got %+v", collected)
+	}
+	if collected[0].TextDelta != "hel" || collected[1].TextDelta != "lo" {
+		t.Fatalf("unexpected text deltas: %+v", collected)
+	}
+	if collected[1].FinishReason != "stop" {
+		t.Fatalf("expected finish reason stop, got %q", collected[1].FinishReason)
+	}
+	if collected[1].RawID != "chatcmpl-stream" || collected[1].Model != "test-model" {
+		t.Fatalf("unexpected metadata: %+v", collected[1])
+	}
+	if collected[1].Usage.TotalTokens != 3 {
+		t.Fatalf("expected usage total 3, got %+v", collected[1].Usage)
+	}
+}
+
+func TestOpenAICompatibleStreamParsesToolCallDeltas(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_001\",\"type\":\"function\",\"function\":{\"name\":\"search_memory\",\"arguments\":\"{\\\"query\\\"\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\":\\\"hello\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := newTestOpenAICompatibleClient(t, server.URL)
+	events, err := client.Stream(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "hello"}}})
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	collected := collectStreamEvents(t, events)
+
+	if len(collected) != 2 {
+		t.Fatalf("expected two events, got %+v", collected)
+	}
+	if collected[0].ToolCallDelta == nil {
+		t.Fatalf("expected first tool call delta")
+	}
+	if collected[0].ToolCallDelta.ID != "call_001" || collected[0].ToolCallDelta.Name != "search_memory" {
+		t.Fatalf("unexpected first tool delta: %+v", collected[0].ToolCallDelta)
+	}
+	if collected[0].ToolCallDelta.ArgumentsDelta != `{"query"` {
+		t.Fatalf("unexpected first arguments delta: %q", collected[0].ToolCallDelta.ArgumentsDelta)
+	}
+	if collected[1].ToolCallDelta == nil || collected[1].ToolCallDelta.ArgumentsDelta != `:"hello"}` {
+		t.Fatalf("unexpected second tool delta: %+v", collected[1].ToolCallDelta)
+	}
+	if collected[1].FinishReason != "tool_calls" {
+		t.Fatalf("expected tool_calls finish reason, got %q", collected[1].FinishReason)
+	}
+}
+
+func TestOpenAICompatibleStreamMapsProviderStatusError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "failed", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	client := newTestOpenAICompatibleClient(t, server.URL)
+	_, err := client.Stream(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "hello"}}})
+	if !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("expected ErrProviderUnavailable, got %v", err)
+	}
+}
+
+func collectStreamEvents(t *testing.T, events <-chan StreamEvent) []StreamEvent {
+	t.Helper()
+	var collected []StreamEvent
+	for event := range events {
+		collected = append(collected, event)
+	}
+	return collected
+}
+
 func newTestOpenAICompatibleClient(t *testing.T, endpoint string) *OpenAICompatibleClient {
 	t.Helper()
 	return newTestOpenAICompatibleClientWithConfig(t, Config{

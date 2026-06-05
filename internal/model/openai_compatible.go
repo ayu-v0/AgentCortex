@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -17,6 +18,7 @@ type OpenAICompatibleClient struct {
 }
 
 var _ Client = (*OpenAICompatibleClient)(nil)
+var _ Streamer = (*OpenAICompatibleClient)(nil)
 
 func NewOpenAICompatibleClient(config Config) (*OpenAICompatibleClient, error) {
 	endpoint := strings.TrimRight(strings.TrimSpace(config.Endpoint), "/")
@@ -44,7 +46,7 @@ func (c *OpenAICompatibleClient) Generate(ctx context.Context, request Request) 
 		return Response{}, err
 	}
 
-	body, err := c.chatRequestBody(request)
+	body, err := c.chatRequestBody(request, false)
 	if err != nil {
 		return Response{}, err
 	}
@@ -78,7 +80,74 @@ func (c *OpenAICompatibleClient) Generate(ctx context.Context, request Request) 
 	return c.responseFromChatResponse(decoded)
 }
 
-func (c *OpenAICompatibleClient) chatRequestBody(request Request) ([]byte, error) {
+func (c *OpenAICompatibleClient) Stream(ctx context.Context, request Request) (<-chan StreamEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	body, err := c.chatRequestBody(request, true)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("%w: create request: %v", ErrProviderUnavailable, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, fmt.Errorf("%w: request failed: %v", ErrProviderUnavailable, err)
+	}
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		resp.Body.Close()
+		return nil, fmt.Errorf("%w: status %d", ErrProviderUnavailable, resp.StatusCode)
+	}
+
+	events := make(chan StreamEvent)
+	go func() {
+		defer close(events)
+		defer resp.Body.Close()
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, ":") {
+				continue
+			}
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "[DONE]" {
+				return
+			}
+			event, err := c.streamEventFromData(data)
+			if err != nil {
+				events <- StreamEvent{Err: err}
+				return
+			}
+			if streamEventEmpty(event) {
+				continue
+			}
+			select {
+			case events <- event:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return events, nil
+}
+
+func (c *OpenAICompatibleClient) chatRequestBody(request Request, stream bool) ([]byte, error) {
 	messages, err := openAICompatibleMessages(request.Messages)
 	if err != nil {
 		return nil, err
@@ -103,6 +172,7 @@ func (c *OpenAICompatibleClient) chatRequestBody(request Request) ([]byte, error
 		Messages:    messages,
 		Tools:       tools,
 		ToolChoice:  toolChoice,
+		Stream:      stream,
 		Temperature: request.Temperature,
 		MaxTokens:   request.MaxTokens,
 	})
@@ -110,6 +180,49 @@ func (c *OpenAICompatibleClient) chatRequestBody(request Request) ([]byte, error
 		return nil, fmt.Errorf("%w: encode request: %v", ErrProviderUnavailable, err)
 	}
 	return body, nil
+}
+
+func (c *OpenAICompatibleClient) streamEventFromData(data string) (StreamEvent, error) {
+	var decoded openAICompatibleChatStreamResponse
+	if err := json.Unmarshal([]byte(data), &decoded); err != nil {
+		return StreamEvent{}, fmt.Errorf("%w: decode stream response: %v", ErrInvalidResponse, err)
+	}
+	if len(decoded.Choices) == 0 {
+		return StreamEvent{}, fmt.Errorf("%w: stream response missing choices", ErrInvalidResponse)
+	}
+	choice := decoded.Choices[0]
+	event := StreamEvent{
+		TextDelta:    choice.Delta.Content,
+		FinishReason: choice.FinishReason,
+		Model:        decoded.Model,
+		RawID:        decoded.ID,
+		Usage: Usage{
+			PromptTokens:     decoded.Usage.PromptTokens,
+			CompletionTokens: decoded.Usage.CompletionTokens,
+			TotalTokens:      decoded.Usage.TotalTokens,
+		},
+	}
+	if strings.TrimSpace(event.Model) == "" {
+		event.Model = c.model
+	}
+	if len(choice.Delta.ToolCalls) > 0 {
+		toolCall := choice.Delta.ToolCalls[0]
+		event.ToolCallDelta = &ToolCallDelta{
+			Index:          toolCall.Index,
+			ID:             strings.TrimSpace(toolCall.ID),
+			Name:           strings.TrimSpace(toolCall.Function.Name),
+			ArgumentsDelta: toolCall.Function.Arguments,
+		}
+	}
+	return event, nil
+}
+
+func streamEventEmpty(event StreamEvent) bool {
+	return event.TextDelta == "" &&
+		event.ToolCallDelta == nil &&
+		event.FinishReason == "" &&
+		event.Usage == (Usage{}) &&
+		event.Err == nil
 }
 
 func openAICompatibleMessages(messages []Message) ([]openAICompatibleChatMessage, error) {
@@ -309,6 +422,7 @@ type openAICompatibleChatRequest struct {
 	Messages    []openAICompatibleChatMessage `json:"messages"`
 	Tools       []openAICompatibleTool        `json:"tools,omitempty"`
 	ToolChoice  any                           `json:"tool_choice,omitempty"`
+	Stream      bool                          `json:"stream,omitempty"`
 	Temperature *float32                      `json:"temperature,omitempty"`
 	MaxTokens   *int                          `json:"max_tokens,omitempty"`
 }
@@ -333,6 +447,7 @@ type openAICompatibleToolFunction struct {
 
 type openAICompatibleToolCall struct {
 	ID       string                           `json:"id"`
+	Index    int                              `json:"index,omitempty"`
 	Type     string                           `json:"type"`
 	Function openAICompatibleToolFunctionCall `json:"function"`
 }
@@ -357,6 +472,20 @@ type openAICompatibleChatResponse struct {
 	Choices []struct {
 		FinishReason string                      `json:"finish_reason"`
 		Message      openAICompatibleChatMessage `json:"message"`
+	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
+type openAICompatibleChatStreamResponse struct {
+	ID      string `json:"id"`
+	Model   string `json:"model"`
+	Choices []struct {
+		FinishReason string                      `json:"finish_reason"`
+		Delta        openAICompatibleChatMessage `json:"delta"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
