@@ -33,6 +33,30 @@ model_name: ""
 model_timeout: "30s"
 ```
 
+## CLI
+
+Run the interactive CLI:
+
+```powershell
+go run .\cmd\agent-cortex-cli --config .\config.yml
+```
+
+The CLI is a separate entrypoint from the HTTP server and requires model configuration plus memory partition keys:
+
+```yaml
+model_provider: "openai-compatible"
+model_endpoint: "http://127.0.0.1:8082"
+model_api_key: ""
+model_name: "test-model"
+model_timeout: "30s"
+agent_id: "agent-cortex-cli"
+user_id: "default-user"
+system_prompt: "You are a concise assistant."
+cli_stream: true
+```
+
+Each successful Q/A turn is automatically saved as memory. Environment variables still override YAML values.
+
 ### Health
 
 ```http

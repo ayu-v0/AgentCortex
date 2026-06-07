@@ -27,6 +27,10 @@ func NewProvider(config Config) (Client, error) {
 	return NewProviderWithContext(context.Background(), config)
 }
 
+func NewStreamingProvider(config Config) (Streamer, error) {
+	return NewStreamingProviderWithContext(context.Background(), config)
+}
+
 func NewProviderWithContext(ctx context.Context, config Config) (Client, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -44,4 +48,16 @@ func NewProviderWithContext(ctx context.Context, config Config) (Client, error) 
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnknownProvider, config.Provider)
 	}
+}
+
+func NewStreamingProviderWithContext(ctx context.Context, config Config) (Streamer, error) {
+	client, err := NewProviderWithContext(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	streamer, ok := client.(Streamer)
+	if !ok {
+		return nil, fmt.Errorf("%w: provider %s does not support streaming", ErrInvalidConfig, config.Provider)
+	}
+	return streamer, nil
 }

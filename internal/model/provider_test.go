@@ -33,3 +33,13 @@ func TestNewProviderUsesDefaultTimeout(t *testing.T) {
 		t.Fatalf("expected default timeout 30s, got %v", openAIClient.client.Timeout)
 	}
 }
+
+func TestNewStreamingProviderReturnsStreamer(t *testing.T) {
+	streamer, err := NewStreamingProvider(Config{Endpoint: "http://127.0.0.1:8082", Model: "test-model"})
+	if err != nil {
+		t.Fatalf("new streaming provider: %v", err)
+	}
+	if _, ok := streamer.(*OpenAICompatibleClient); !ok {
+		t.Fatalf("expected OpenAICompatibleClient, got %T", streamer)
+	}
+}

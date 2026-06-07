@@ -3,6 +3,7 @@ package config
 import (
 	"io"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -28,6 +29,10 @@ type Config struct {
 	ModelAPIKey       string `yaml:"model_api_key"`
 	ModelName         string `yaml:"model_name"`
 	ModelTimeout      string `yaml:"model_timeout"`
+	AgentID           string `yaml:"agent_id"`
+	UserID            string `yaml:"user_id"`
+	SystemPrompt      string `yaml:"system_prompt"`
+	CLIStream         bool   `yaml:"cli_stream"`
 }
 
 func FromEnv() Config {
@@ -45,6 +50,10 @@ func FromEnvWithBase(base Config) Config {
 	base.ModelAPIKey = getenv("MODEL_API_KEY", base.ModelAPIKey)
 	base.ModelName = getenv("MODEL_NAME", base.ModelName)
 	base.ModelTimeout = getenv("MODEL_TIMEOUT", base.ModelTimeout)
+	base.AgentID = getenv("AGENT_ID", base.AgentID)
+	base.UserID = getenv("USER_ID", base.UserID)
+	base.SystemPrompt = getenv("SYSTEM_PROMPT", base.SystemPrompt)
+	base.CLIStream = getenvBool("CLI_STREAM", base.CLIStream)
 	return base
 }
 
@@ -99,6 +108,10 @@ func Default() Config {
 		ModelAPIKey:       "",
 		ModelName:         "",
 		ModelTimeout:      defaultModelTimeout,
+		AgentID:           "",
+		UserID:            "",
+		SystemPrompt:      "",
+		CLIStream:         true,
 	}
 }
 
@@ -108,4 +121,16 @@ func getenv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func getenvBool(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
