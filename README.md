@@ -9,8 +9,29 @@ Run the Gin server:
 go run .\cmd\agent-cortex
 ```
 
+You can also load a YAML file:
+
+```powershell
+go run .\cmd\agent-cortex --config .\config.yml
+```
+
 The service listens on `:8080` by default. Set `ADDR` or `DATABASE_PATH` to override the listen address or SQLite database path.
-Set `EMBEDDING_PROVIDER` or `EMBEDDING_ENDPOINT` to override the search embedding provider or endpoint.
+Set `EMBEDDING_PROVIDER` or `EMBEDDING_ENDPOINT` to override the search embedding provider or endpoint. Environment variables override values loaded from the YAML config file.
+
+Example `config.yml`:
+
+```yaml
+addr: ":8080"
+database_path: "agent_memory.db"
+storage_backend: "sqlitevec"
+embedding_provider: "static"
+embedding_endpoint: "http://127.0.0.1:8081"
+model_provider: "openai-compatible"
+model_endpoint: ""
+model_api_key: ""
+model_name: ""
+model_timeout: "30s"
+```
 
 ### Health
 

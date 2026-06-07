@@ -11,7 +11,14 @@ import (
 )
 
 func Run() error {
-	cfg := config.FromEnv()
+	return RunWithConfigPath("")
+}
+
+func RunWithConfigPath(configPath string) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
 
 	backend, err := openMemoryBackend(cfg)
 	if err != nil {
