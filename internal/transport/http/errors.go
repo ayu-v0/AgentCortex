@@ -7,6 +7,7 @@ import (
 
 	"github.com/ayu-v0/agent-cortex/internal/embedding"
 	"github.com/ayu-v0/agent-cortex/internal/memory"
+	"github.com/ayu-v0/agent-cortex/internal/model"
 	"github.com/gin-gonic/gin"
 )
 
@@ -25,7 +26,9 @@ func statusFromError(err error) int {
 		errors.Is(err, memory.ErrInvalidEmbeddingValue),
 		errors.Is(err, embedding.ErrEmptyInput),
 		errors.Is(err, embedding.ErrInvalidVector),
-		errors.Is(err, embedding.ErrInvalidVectorValue):
+		errors.Is(err, embedding.ErrInvalidVectorValue),
+		errors.Is(err, model.ErrInvalidRequest),
+		errors.Is(err, model.ErrEmptyMessages):
 		return stdhttp.StatusBadRequest
 	default:
 		return stdhttp.StatusInternalServerError

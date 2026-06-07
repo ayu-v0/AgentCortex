@@ -10,10 +10,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ayu-v0/agent-cortex/internal/embedding"
 	"github.com/ayu-v0/agent-cortex/internal/memory"
+	"github.com/ayu-v0/agent-cortex/internal/model"
 )
 
 type fakeEmbedder struct {
@@ -31,6 +34,29 @@ func (e *fakeEmbedder) Embed(ctx context.Context, input embedding.Input) (embedd
 		return e.vector, nil
 	}
 	return embedding.Vector{0, 1, 2, 3}, nil
+}
+
+type fakeStreamer struct {
+	events []model.StreamEvent
+	err    error
+	block  <-chan struct{}
+}
+
+func (f *fakeStreamer) Stream(context.Context, model.Request) (<-chan model.StreamEvent, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	events := make(chan model.StreamEvent, len(f.events))
+	go func() {
+		defer close(events)
+		for _, event := range f.events {
+			if f.block != nil {
+				<-f.block
+			}
+			events <- event
+		}
+	}()
+	return events, nil
 }
 
 type failingBackend struct{}
@@ -474,6 +500,142 @@ func TestSearchMemoryMasksMissingMarkdownFile(t *testing.T) {
 	}
 }
 
+func TestQAStreamReturnsTextDeltasAndPersistsMemory(t *testing.T) {
+	backend := &recordingBackend{}
+	server := newTestServerWithMarkdownDirAndDependencies(t, backend, t.TempDir(), &fakeEmbedder{}, &fakeStreamer{
+		events: []model.StreamEvent{
+			{TextDelta: "hello"},
+			{TextDelta: " world", FinishReason: "stop"},
+		},
+	})
+
+	body := `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"user","content":"question"}]}`
+	recorder := performRequest(server, "POST", "/api/v1/qa/stream", body)
+
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	response := recorder.Body.String()
+	for _, expected := range []string{
+		`event: text_delta`,
+		`"text":"hello"`,
+		`"text":" world"`,
+		`event: finished`,
+		`"answer":"hello world"`,
+		`"memory_saved":true`,
+		`"markdown_synced":true`,
+	} {
+		if !strings.Contains(response, expected) {
+			t.Fatalf("expected response to contain %q, got %s", expected, response)
+		}
+	}
+	if backend.saved.Question != "question" || backend.saved.Answer != "hello world" {
+		t.Fatalf("expected saved memory question/answer, got %#v", backend.saved)
+	}
+}
+
+func TestQAStreamReturnsWarningWhenEmbeddingFails(t *testing.T) {
+	backend := &recordingBackend{}
+	server := newTestServerWithMarkdownDirAndDependencies(t, backend, t.TempDir(), &fakeEmbedder{err: embedding.ErrProviderUnavailable}, &fakeStreamer{
+		events: []model.StreamEvent{{TextDelta: "answer", FinishReason: "stop"}},
+	})
+
+	body := `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"user","content":"question"}]}`
+	recorder := performRequest(server, "POST", "/api/v1/qa/stream", body)
+
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	response := recorder.Body.String()
+	if !strings.Contains(response, `event: warning`) {
+		t.Fatalf("expected warning event, got %s", response)
+	}
+	if !strings.Contains(response, `"memory_saved":false`) {
+		t.Fatalf("expected unsaved memory in finished event, got %s", response)
+	}
+	if backend.saved.ID != "" {
+		t.Fatalf("expected no saved memory, got %#v", backend.saved)
+	}
+}
+
+func TestQAStreamRejectsMissingLastUserMessage(t *testing.T) {
+	server := newTestServerWithMarkdownDirAndDependencies(t, &recordingBackend{}, t.TempDir(), &fakeEmbedder{}, &fakeStreamer{})
+
+	body := `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"assistant","content":"question"}]}`
+	recorder := performRequest(server, "POST", "/api/v1/qa/stream", body)
+
+	if recorder.Code != stdhttp.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", recorder.Code)
+	}
+}
+
+func TestQAStreamReturnsErrorEventOnModelStreamFailure(t *testing.T) {
+	server := newTestServerWithMarkdownDirAndDependencies(t, &recordingBackend{}, t.TempDir(), &fakeEmbedder{}, &fakeStreamer{
+		events: []model.StreamEvent{{Err: errors.New("boom")}},
+	})
+
+	body := `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"user","content":"question"}]}`
+	recorder := performRequest(server, "POST", "/api/v1/qa/stream", body)
+
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	response := recorder.Body.String()
+	if !strings.Contains(response, `event: error`) {
+		t.Fatalf("expected error event, got %s", response)
+	}
+	if !strings.Contains(response, `"code":"model_stream_failed"`) {
+		t.Fatalf("expected model stream failed code, got %s", response)
+	}
+	if strings.Contains(response, `event: finished`) {
+		t.Fatalf("expected no finished event on stream error, got %s", response)
+	}
+}
+
+func TestQAStreamEmitsHeartbeatDuringLongRunningStream(t *testing.T) {
+	originalInterval := heartbeatInterval
+	heartbeatInterval = 10 * time.Millisecond
+	defer func() {
+		heartbeatInterval = originalInterval
+	}()
+
+	release := make(chan struct{})
+	var emitted atomic.Bool
+	server := newTestServerWithMarkdownDirAndDependencies(t, &recordingBackend{}, t.TempDir(), &fakeEmbedder{}, &fakeStreamer{
+		events: []model.StreamEvent{
+			{TextDelta: "answer", FinishReason: "stop"},
+		},
+		block: release,
+	})
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		body := `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"user","content":"question"}]}`
+		done <- performRequest(server, "POST", "/api/v1/qa/stream", body)
+	}()
+
+	var recorder *httptest.ResponseRecorder
+	select {
+	case recorder = <-done:
+		t.Fatal("expected stream to wait before completing")
+	case <-time.After(35 * time.Millisecond):
+		close(release)
+		recorder = <-done
+		emitted.Store(true)
+	}
+
+	if !emitted.Load() {
+		t.Fatal("expected heartbeat wait path to run")
+	}
+	response := recorder.Body.String()
+	if !strings.Contains(response, `event: heartbeat`) {
+		t.Fatalf("expected heartbeat event, got %s", response)
+	}
+	if !strings.Contains(response, `event: finished`) {
+		t.Fatalf("expected finished event, got %s", response)
+	}
+}
+
 func TestStatusFromErrorMapsMemoryValidationErrors(t *testing.T) {
 	if status := statusFromError(memory.ErrInvalidEmbedding); status != stdhttp.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", status)
@@ -513,11 +675,17 @@ func newTestServerWithEmbedder(t *testing.T, backend memory.Backend, embedder em
 func newTestServerWithMarkdownDirAndEmbedder(t *testing.T, backend memory.Backend, markdownDir string, embedder embedding.Embedder) *Server {
 	t.Helper()
 
+	return newTestServerWithMarkdownDirAndDependencies(t, backend, markdownDir, embedder, &fakeStreamer{})
+}
+
+func newTestServerWithMarkdownDirAndDependencies(t *testing.T, backend memory.Backend, markdownDir string, embedder embedding.Embedder, streamer model.Streamer) *Server {
+	t.Helper()
+
 	service, err := memory.NewService(backend)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
-	return newServer(service, embedder, markdownDir)
+	return newServer(service, embedder, streamer, markdownDir)
 }
 
 func performRequest(server *Server, method, path, body string) *httptest.ResponseRecorder {

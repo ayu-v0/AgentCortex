@@ -7,16 +7,16 @@ import (
 	"testing"
 )
 
-func TestFromEnvReadsModelConfig(t *testing.T) {
+func TestFromEnvReadsConfig(t *testing.T) {
 	t.Setenv("MODEL_PROVIDER", "openai-compatible")
 	t.Setenv("MODEL_ENDPOINT", "http://127.0.0.1:8082")
 	t.Setenv("MODEL_API_KEY", "secret")
 	t.Setenv("MODEL_NAME", "test-model")
 	t.Setenv("MODEL_TIMEOUT", "45s")
+	t.Setenv("SERVER_ENDPOINT", "http://127.0.0.1:9090")
 	t.Setenv("AGENT_ID", "agent-1")
 	t.Setenv("USER_ID", "user-1")
 	t.Setenv("SYSTEM_PROMPT", "be concise")
-	t.Setenv("CLI_STREAM", "false")
 
 	cfg := FromEnv()
 
@@ -35,6 +35,9 @@ func TestFromEnvReadsModelConfig(t *testing.T) {
 	if cfg.ModelTimeout != "45s" {
 		t.Fatalf("expected model timeout, got %q", cfg.ModelTimeout)
 	}
+	if cfg.ServerEndpoint != "http://127.0.0.1:9090" {
+		t.Fatalf("expected server endpoint, got %q", cfg.ServerEndpoint)
+	}
 	if cfg.AgentID != "agent-1" {
 		t.Fatalf("expected agent id, got %q", cfg.AgentID)
 	}
@@ -44,12 +47,9 @@ func TestFromEnvReadsModelConfig(t *testing.T) {
 	if cfg.SystemPrompt != "be concise" {
 		t.Fatalf("expected system prompt, got %q", cfg.SystemPrompt)
 	}
-	if cfg.CLIStream {
-		t.Fatal("expected cli stream false")
-	}
 }
 
-func TestFromEnvDefaultsModelConfigWithoutEnablingModelClient(t *testing.T) {
+func TestFromEnvDefaultsConfig(t *testing.T) {
 	cfg := FromEnv()
 
 	if cfg.ModelProvider != "openai-compatible" {
@@ -67,8 +67,8 @@ func TestFromEnvDefaultsModelConfigWithoutEnablingModelClient(t *testing.T) {
 	if cfg.ModelTimeout != "30s" {
 		t.Fatalf("expected default model timeout 30s, got %q", cfg.ModelTimeout)
 	}
-	if !cfg.CLIStream {
-		t.Fatal("expected cli stream enabled by default")
+	if cfg.ServerEndpoint != defaultServerEndpoint {
+		t.Fatalf("expected default server endpoint, got %q", cfg.ServerEndpoint)
 	}
 }
 
@@ -84,10 +84,10 @@ model_endpoint: "http://127.0.0.1:8082"
 model_api_key: "secret"
 model_name: "test-model"
 model_timeout: "45s"
+server_endpoint: "http://127.0.0.1:9090"
 agent_id: "agent-1"
 user_id: "user-1"
 system_prompt: "be concise"
-cli_stream: false
 `))
 	if err != nil {
 		t.Fatalf("from yaml: %v", err)
@@ -123,6 +123,9 @@ cli_stream: false
 	if cfg.ModelTimeout != "45s" {
 		t.Fatalf("expected model timeout, got %q", cfg.ModelTimeout)
 	}
+	if cfg.ServerEndpoint != "http://127.0.0.1:9090" {
+		t.Fatalf("expected server endpoint, got %q", cfg.ServerEndpoint)
+	}
 	if cfg.AgentID != "agent-1" {
 		t.Fatalf("expected agent id, got %q", cfg.AgentID)
 	}
@@ -131,9 +134,6 @@ cli_stream: false
 	}
 	if cfg.SystemPrompt != "be concise" {
 		t.Fatalf("expected system prompt, got %q", cfg.SystemPrompt)
-	}
-	if cfg.CLIStream {
-		t.Fatal("expected cli stream false")
 	}
 }
 
@@ -152,6 +152,9 @@ func TestFromYAMLKeepsDefaultsForOmittedFields(t *testing.T) {
 	if cfg.ModelAPIKey != "secret" {
 		t.Fatalf("expected model api key, got %q", cfg.ModelAPIKey)
 	}
+	if cfg.ServerEndpoint != defaultServerEndpoint {
+		t.Fatalf("expected default server endpoint, got %q", cfg.ServerEndpoint)
+	}
 }
 
 func TestFromYAMLReaderReturnsParseErrors(t *testing.T) {
@@ -164,7 +167,7 @@ func TestFromYAMLReaderReturnsParseErrors(t *testing.T) {
 func TestFromYAMLFileReadsConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yml")
-	if err := os.WriteFile(path, []byte("addr: \":9090\"\nmodel_name: \"file-model\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("addr: \":9090\"\nserver_endpoint: \"http://127.0.0.1:9090\"\n"), 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
 	}
 
@@ -176,20 +179,19 @@ func TestFromYAMLFileReadsConfig(t *testing.T) {
 	if cfg.Addr != ":9090" {
 		t.Fatalf("expected addr, got %q", cfg.Addr)
 	}
-	if cfg.ModelName != "file-model" {
-		t.Fatalf("expected model name, got %q", cfg.ModelName)
+	if cfg.ServerEndpoint != "http://127.0.0.1:9090" {
+		t.Fatalf("expected server endpoint, got %q", cfg.ServerEndpoint)
 	}
 }
 
 func TestLoadUsesYAMLFileAndEnvOverrides(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yml")
-	if err := os.WriteFile(path, []byte("addr: \":9090\"\nmodel_name: \"file-model\"\ncli_stream: false\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("addr: \":9090\"\nserver_endpoint: \"http://127.0.0.1:8080\"\n"), 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
 	}
 
-	t.Setenv("MODEL_NAME", "env-model")
-	t.Setenv("CLI_STREAM", "true")
+	t.Setenv("SERVER_ENDPOINT", "http://127.0.0.1:9090")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -199,11 +201,8 @@ func TestLoadUsesYAMLFileAndEnvOverrides(t *testing.T) {
 	if cfg.Addr != ":9090" {
 		t.Fatalf("expected addr from yaml, got %q", cfg.Addr)
 	}
-	if cfg.ModelName != "env-model" {
-		t.Fatalf("expected env override, got %q", cfg.ModelName)
-	}
-	if !cfg.CLIStream {
-		t.Fatal("expected env bool override")
+	if cfg.ServerEndpoint != "http://127.0.0.1:9090" {
+		t.Fatalf("expected env override, got %q", cfg.ServerEndpoint)
 	}
 }
 

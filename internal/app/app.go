@@ -19,7 +19,7 @@ func RunWithConfigPath(configPath string) error {
 	}
 	defer runtime.Close()
 
-	server := transporthttp.NewServer(runtime.MemoryService, runtime.Embedder)
+	server := transporthttp.NewServer(runtime.MemoryService, runtime.Embedder, runtime.ModelStreamer)
 	log.Printf("agent-cortex HTTP server listening on %s", runtime.Config.Addr)
 	if err := server.Run(runtime.Config.Addr); err != nil {
 		return err
