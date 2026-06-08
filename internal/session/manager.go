@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -47,10 +46,10 @@ type Handle struct {
 
 func NewManager(client model.Streamer, config Config) (*Manager, error) {
 	if client == nil {
-		return nil, fmt.Errorf("%w: client is required", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 	if config.MaxActiveSessions < 0 {
-		return nil, fmt.Errorf("%w: max active sessions cannot be negative", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 	sessionTTL := config.SessionTTL
 	if sessionTTL <= 0 {

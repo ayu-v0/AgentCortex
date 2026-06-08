@@ -2,7 +2,6 @@ package ratelimit
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -93,7 +92,7 @@ func (r *Registry) Register(limitType Type, factory Factory) error {
 		return ErrNilFactory
 	}
 	if limitType == "" {
-		return fmt.Errorf("%w: type is required", ErrInvalidConfig)
+		return ErrInvalidConfig
 	}
 
 	r.mu.Lock()
@@ -108,7 +107,7 @@ func (r *Registry) NewLimiter(config Config) (Limiter, error) {
 	factory, ok := r.factories[config.Type]
 	r.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrUnknownType, config.Type)
+		return nil, ErrUnknownType
 	}
 
 	return factory(config)
@@ -144,7 +143,7 @@ func normalizeClock(clock clockpkg.Clock) clockpkg.Clock {
 
 func validateRequestSize(n int) error {
 	if n <= 0 {
-		return fmt.Errorf("%w: n must be positive", ErrInvalidConfig)
+		return ErrInvalidConfig
 	}
 	return nil
 }

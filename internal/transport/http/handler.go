@@ -254,7 +254,7 @@ func (h *handlers) replaceSearchContentFromMarkdown(userID, agentID string, resu
 
 	content, err := os.ReadFile(filepath.Join(h.memoryMarkdownDir, filename))
 	if err != nil {
-		return fmt.Errorf("read memory markdown: %w", err)
+		return errors.Join(ErrMemoryMarkdown, err)
 	}
 
 	entries := memoryMarkdownEntriesByID(string(content))
@@ -303,11 +303,11 @@ func (h *handlers) ensureMemoryMarkdown(item memory.Memory) error {
 
 	exists, err := utils.MarkdownFileExists(h.memoryMarkdownDir, filename)
 	if err != nil {
-		return fmt.Errorf("check memory markdown: %w", err)
+		return errors.Join(ErrMemoryMarkdown, err)
 	}
 	if exists {
 		if _, err := utils.AppendMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownAppendContent(item)); err != nil {
-			return fmt.Errorf("append memory markdown: %w", err)
+			return errors.Join(ErrMemoryMarkdown, err)
 		}
 		return nil
 	}
@@ -316,11 +316,11 @@ func (h *handlers) ensureMemoryMarkdown(item memory.Memory) error {
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			if _, err := utils.AppendMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownAppendContent(item)); err != nil {
-				return fmt.Errorf("append memory markdown after concurrent create: %w", err)
+				return errors.Join(ErrMemoryMarkdown, err)
 			}
 			return nil
 		}
-		return fmt.Errorf("create memory markdown: %w", err)
+		return errors.Join(ErrMemoryMarkdown, err)
 	}
 	return nil
 }
@@ -329,7 +329,7 @@ func memoryMarkdownFilename(userID, agentID string) (string, error) {
 	userID = sanitizeMarkdownFilenamePart(userID)
 	agentID = sanitizeMarkdownFilenamePart(agentID)
 	if userID == "" || agentID == "" {
-		return "", fmt.Errorf("memory markdown filename requires user and agent IDs")
+		return "", model.ErrInvalidRequest
 	}
 	return userID + "_" + agentID + "_Memory.md", nil
 }

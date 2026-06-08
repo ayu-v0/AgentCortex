@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"strings"
 )
@@ -23,11 +23,11 @@ var _ Streamer = (*OpenAICompatibleClient)(nil)
 func NewOpenAICompatibleClient(config Config) (*OpenAICompatibleClient, error) {
 	endpoint := strings.TrimRight(strings.TrimSpace(config.Endpoint), "/")
 	if endpoint == "" {
-		return nil, fmt.Errorf("%w: endpoint is required", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 	model := strings.TrimSpace(config.Model)
 	if model == "" {
-		return nil, fmt.Errorf("%w: model is required", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 	timeout := config.Timeout
 	if timeout <= 0 {
@@ -53,7 +53,7 @@ func (c *OpenAICompatibleClient) Generate(ctx context.Context, request Request) 
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return Response{}, fmt.Errorf("%w: create request: %v", ErrProviderUnavailable, err)
+		return Response{}, errors.Join(ErrProviderUnavailable, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -65,17 +65,17 @@ func (c *OpenAICompatibleClient) Generate(ctx context.Context, request Request) 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return Response{}, ctxErr
 		}
-		return Response{}, fmt.Errorf("%w: request failed: %v", ErrProviderUnavailable, err)
+		return Response{}, errors.Join(ErrProviderUnavailable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return Response{}, fmt.Errorf("%w: status %d", ErrProviderUnavailable, resp.StatusCode)
+		return Response{}, ErrProviderUnavailable
 	}
 
 	var decoded openAICompatibleChatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return Response{}, fmt.Errorf("%w: decode response: %v", ErrInvalidResponse, err)
+		return Response{}, errors.Join(ErrInvalidResponse, err)
 	}
 	return c.responseFromChatResponse(decoded)
 }
@@ -92,7 +92,7 @@ func (c *OpenAICompatibleClient) Stream(ctx context.Context, request Request) (<
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("%w: create request: %v", ErrProviderUnavailable, err)
+		return nil, errors.Join(ErrProviderUnavailable, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -104,12 +104,12 @@ func (c *OpenAICompatibleClient) Stream(ctx context.Context, request Request) (<
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		return nil, fmt.Errorf("%w: request failed: %v", ErrProviderUnavailable, err)
+		return nil, errors.Join(ErrProviderUnavailable, err)
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		resp.Body.Close()
-		return nil, fmt.Errorf("%w: status %d", ErrProviderUnavailable, resp.StatusCode)
+		return nil, ErrProviderUnavailable
 	}
 
 	events := make(chan StreamEvent)
@@ -161,10 +161,10 @@ func (c *OpenAICompatibleClient) chatRequestBody(request Request, stream bool) (
 		return nil, err
 	}
 	if request.Temperature != nil && (*request.Temperature < 0 || *request.Temperature > 2) {
-		return nil, fmt.Errorf("%w: temperature must be between 0 and 2", ErrInvalidRequest)
+		return nil, ErrInvalidRequest
 	}
 	if request.MaxTokens != nil && *request.MaxTokens <= 0 {
-		return nil, fmt.Errorf("%w: max tokens must be positive", ErrInvalidRequest)
+		return nil, ErrInvalidRequest
 	}
 
 	body, err := json.Marshal(openAICompatibleChatRequest{
@@ -177,7 +177,7 @@ func (c *OpenAICompatibleClient) chatRequestBody(request Request, stream bool) (
 		MaxTokens:   request.MaxTokens,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: encode request: %v", ErrProviderUnavailable, err)
+		return nil, errors.Join(ErrProviderUnavailable, err)
 	}
 	return body, nil
 }
@@ -185,10 +185,10 @@ func (c *OpenAICompatibleClient) chatRequestBody(request Request, stream bool) (
 func (c *OpenAICompatibleClient) streamEventFromData(data string) (StreamEvent, error) {
 	var decoded openAICompatibleChatStreamResponse
 	if err := json.Unmarshal([]byte(data), &decoded); err != nil {
-		return StreamEvent{}, fmt.Errorf("%w: decode stream response: %v", ErrInvalidResponse, err)
+		return StreamEvent{}, errors.Join(ErrInvalidResponse, err)
 	}
 	if len(decoded.Choices) == 0 {
-		return StreamEvent{}, fmt.Errorf("%w: stream response missing choices", ErrInvalidResponse)
+		return StreamEvent{}, ErrInvalidResponse
 	}
 	choice := decoded.Choices[0]
 	event := StreamEvent{
@@ -230,7 +230,7 @@ func openAICompatibleMessages(messages []Message) ([]openAICompatibleChatMessage
 		return nil, ErrEmptyMessages
 	}
 	converted := make([]openAICompatibleChatMessage, 0, len(messages))
-	for i, message := range messages {
+	for _, message := range messages {
 		content := strings.TrimSpace(message.Content)
 		convertedMessage := openAICompatibleChatMessage{
 			Role:       string(message.Role),
@@ -241,7 +241,7 @@ func openAICompatibleMessages(messages []Message) ([]openAICompatibleChatMessage
 		switch message.Role {
 		case RoleSystem, RoleUser:
 			if content == "" {
-				return nil, fmt.Errorf("%w: message %d content is empty", ErrInvalidRequest, i)
+				return nil, ErrInvalidRequest
 			}
 		case RoleAssistant:
 			toolCalls, err := openAICompatibleToolCalls(message.ToolCalls)
@@ -249,18 +249,18 @@ func openAICompatibleMessages(messages []Message) ([]openAICompatibleChatMessage
 				return nil, err
 			}
 			if content == "" && len(toolCalls) == 0 {
-				return nil, fmt.Errorf("%w: assistant message %d requires content or tool calls", ErrInvalidRequest, i)
+				return nil, ErrInvalidRequest
 			}
 			convertedMessage.ToolCalls = toolCalls
 		case RoleTool:
 			if content == "" {
-				return nil, fmt.Errorf("%w: tool message %d content is empty", ErrInvalidRequest, i)
+				return nil, ErrInvalidRequest
 			}
 			if convertedMessage.ToolCallID == "" {
-				return nil, fmt.Errorf("%w: tool message %d missing tool call id", ErrInvalidRequest, i)
+				return nil, ErrInvalidRequest
 			}
 		default:
-			return nil, fmt.Errorf("%w: unknown role %q", ErrInvalidRequest, message.Role)
+			return nil, ErrInvalidRequest
 		}
 		converted = append(converted, convertedMessage)
 	}
@@ -272,17 +272,17 @@ func openAICompatibleTools(tools []Tool) ([]openAICompatibleTool, error) {
 		return nil, nil
 	}
 	converted := make([]openAICompatibleTool, 0, len(tools))
-	for i, tool := range tools {
+	for _, tool := range tools {
 		name := strings.TrimSpace(tool.Name)
 		description := strings.TrimSpace(tool.Description)
 		if name == "" {
-			return nil, fmt.Errorf("%w: tool %d name is empty", ErrInvalidRequest, i)
+			return nil, ErrInvalidRequest
 		}
 		if description == "" {
-			return nil, fmt.Errorf("%w: tool %d description is empty", ErrInvalidRequest, i)
+			return nil, ErrInvalidRequest
 		}
 		if !isJSONObject(tool.Parameters) {
-			return nil, fmt.Errorf("%w: tool %d parameters must be a JSON object", ErrInvalidRequest, i)
+			return nil, ErrInvalidRequest
 		}
 		converted = append(converted, openAICompatibleTool{
 			Type: "function",
@@ -310,7 +310,7 @@ func openAICompatibleToolChoice(choice *ToolChoice) (any, error) {
 	case ToolChoiceTool:
 		name := strings.TrimSpace(choice.Name)
 		if name == "" {
-			return nil, fmt.Errorf("%w: tool choice name is required", ErrInvalidRequest)
+			return nil, ErrInvalidRequest
 		}
 		return openAICompatibleNamedToolChoice{
 			Type: "function",
@@ -319,7 +319,7 @@ func openAICompatibleToolChoice(choice *ToolChoice) (any, error) {
 			},
 		}, nil
 	default:
-		return nil, fmt.Errorf("%w: unknown tool choice %q", ErrInvalidRequest, choice.Mode)
+		return nil, ErrInvalidRequest
 	}
 }
 
@@ -328,17 +328,17 @@ func openAICompatibleToolCalls(toolCalls []ToolCall) ([]openAICompatibleToolCall
 		return nil, nil
 	}
 	converted := make([]openAICompatibleToolCall, 0, len(toolCalls))
-	for i, toolCall := range toolCalls {
+	for _, toolCall := range toolCalls {
 		id := strings.TrimSpace(toolCall.ID)
 		name := strings.TrimSpace(toolCall.Name)
 		if id == "" {
-			return nil, fmt.Errorf("%w: tool call %d id is empty", ErrInvalidRequest, i)
+			return nil, ErrInvalidRequest
 		}
 		if name == "" {
-			return nil, fmt.Errorf("%w: tool call %d name is empty", ErrInvalidRequest, i)
+			return nil, ErrInvalidRequest
 		}
 		if !json.Valid(toolCall.Arguments) {
-			return nil, fmt.Errorf("%w: tool call %d arguments must be valid JSON", ErrInvalidRequest, i)
+			return nil, ErrInvalidRequest
 		}
 		converted = append(converted, openAICompatibleToolCall{
 			ID:   id,
@@ -354,7 +354,7 @@ func openAICompatibleToolCalls(toolCalls []ToolCall) ([]openAICompatibleToolCall
 
 func (c *OpenAICompatibleClient) responseFromChatResponse(decoded openAICompatibleChatResponse) (Response, error) {
 	if len(decoded.Choices) == 0 {
-		return Response{}, fmt.Errorf("%w: response missing choices", ErrInvalidResponse)
+		return Response{}, ErrInvalidResponse
 	}
 	choice := decoded.Choices[0]
 	toolCalls, err := toolCallsFromOpenAICompatible(choice.Message.ToolCalls)
@@ -362,7 +362,7 @@ func (c *OpenAICompatibleClient) responseFromChatResponse(decoded openAICompatib
 		return Response{}, err
 	}
 	if strings.TrimSpace(choice.Message.Content) == "" && len(toolCalls) == 0 {
-		return Response{}, fmt.Errorf("%w: response missing content and tool calls", ErrInvalidResponse)
+		return Response{}, ErrInvalidResponse
 	}
 	model := strings.TrimSpace(decoded.Model)
 	if model == "" {
@@ -387,18 +387,18 @@ func toolCallsFromOpenAICompatible(toolCalls []openAICompatibleToolCall) ([]Tool
 		return nil, nil
 	}
 	converted := make([]ToolCall, 0, len(toolCalls))
-	for i, toolCall := range toolCalls {
+	for _, toolCall := range toolCalls {
 		id := strings.TrimSpace(toolCall.ID)
 		name := strings.TrimSpace(toolCall.Function.Name)
 		if id == "" {
-			return nil, fmt.Errorf("%w: tool call %d id is empty", ErrInvalidResponse, i)
+			return nil, ErrInvalidResponse
 		}
 		if name == "" {
-			return nil, fmt.Errorf("%w: tool call %d name is empty", ErrInvalidResponse, i)
+			return nil, ErrInvalidResponse
 		}
 		arguments := json.RawMessage(toolCall.Function.Arguments)
 		if !json.Valid(arguments) {
-			return nil, fmt.Errorf("%w: tool call %d arguments are invalid JSON", ErrInvalidResponse, i)
+			return nil, ErrInvalidResponse
 		}
 		converted = append(converted, ToolCall{
 			ID:        id,

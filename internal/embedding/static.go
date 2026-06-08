@@ -17,7 +17,7 @@ var _ Embedder = (*StaticEmbedder)(nil)
 
 func NewStaticEmbedder(dimensions int) (*StaticEmbedder, error) {
 	if dimensions <= 0 {
-		return nil, fmt.Errorf("%w: dimensions must be positive", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 	return &StaticEmbedder{dimensions: dimensions}, nil
 }

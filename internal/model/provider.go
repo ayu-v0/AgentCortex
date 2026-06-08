@@ -2,7 +2,6 @@ package model
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
@@ -46,7 +45,7 @@ func NewProviderWithContext(ctx context.Context, config Config) (Client, error) 
 	case ProviderOpenAICompatible:
 		return NewOpenAICompatibleClient(config)
 	default:
-		return nil, fmt.Errorf("%w: %s", ErrUnknownProvider, config.Provider)
+		return nil, ErrUnknownProvider
 	}
 }
 
@@ -57,7 +56,7 @@ func NewStreamingProviderWithContext(ctx context.Context, config Config) (Stream
 	}
 	streamer, ok := client.(Streamer)
 	if !ok {
-		return nil, fmt.Errorf("%w: provider %s does not support streaming", ErrInvalidConfig, config.Provider)
+		return nil, ErrInvalidConfig
 	}
 	return streamer, nil
 }

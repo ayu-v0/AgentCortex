@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -57,7 +56,7 @@ type HTTPQAClient struct {
 func NewHTTPQAClient(baseURL string, httpClient *http.Client, authorization string) (*HTTPQAClient, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
-		return nil, fmt.Errorf("server endpoint is required")
+		return nil, ErrServerEndpointRequired
 	}
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 0}
@@ -93,7 +92,7 @@ func (c *HTTPQAClient) StreamQA(ctx context.Context, reqBody QARequest) (<-chan 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		defer resp.Body.Close()
 		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return nil, fmt.Errorf("qa stream request failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(payload)))
+		return nil, qaStreamStatusError{statusCode: resp.StatusCode, body: string(payload)}
 	}
 
 	events := make(chan QAEvent)
@@ -219,10 +218,10 @@ func decodeEvent(name, data string) (QAEvent, error) {
 		if err := json.Unmarshal([]byte(data), &payload); err != nil {
 			return QAEvent{}, err
 		}
-		return QAEvent{Type: EventError, Err: fmt.Errorf("%s: %s", strings.TrimSpace(payload.Code), strings.TrimSpace(payload.Message))}, nil
+		return QAEvent{Type: EventError, Err: qaStreamEventError{code: payload.Code, message: payload.Message}}, nil
 	case EventHeartbeat:
 		return QAEvent{Type: EventHeartbeat}, nil
 	default:
-		return QAEvent{}, fmt.Errorf("unknown event type %q", name)
+		return QAEvent{}, unknownEventTypeError(name)
 	}
 }

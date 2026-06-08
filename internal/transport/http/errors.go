@@ -11,6 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+var ErrMemoryMarkdown = errors.New("memory markdown error")
+
 func writeHTTPError(c *gin.Context, err error) {
 	status := statusFromError(err)
 	if status == stdhttp.StatusInternalServerError {

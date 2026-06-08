@@ -495,7 +495,7 @@ func (h *handlers) populateMarkdownSearchContent(userID, agentID string, results
 	}
 	content, err := os.ReadFile(filepath.Join(h.memoryMarkdownDir, filename))
 	if err != nil {
-		return nil, fmt.Errorf("read memory markdown: %w", err)
+		return nil, errors.Join(ErrMemoryMarkdown, err)
 	}
 
 	entries := memoryMarkdownEntriesByID(string(content))

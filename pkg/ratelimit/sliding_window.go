@@ -2,7 +2,6 @@ package ratelimit
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	clockpkg "github.com/ayu-v0/agent-cortex/pkg/clock"
@@ -25,10 +24,10 @@ type slidingWindowState struct {
 // NewSlidingWindow returns a keyed sliding window limiter.
 func NewSlidingWindow(config Config) (Limiter, error) {
 	if config.Rate <= 0 {
-		return nil, fmt.Errorf("%w: rate must be positive", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 	if config.Window <= 0 {
-		return nil, fmt.Errorf("%w: window must be positive", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 
 	return &SlidingWindow{

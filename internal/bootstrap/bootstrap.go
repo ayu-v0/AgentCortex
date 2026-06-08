@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -63,7 +62,7 @@ func New(ctx context.Context, configPath string, options Options) (*Runtime, err
 		timeout, err := time.ParseDuration(strings.TrimSpace(cfg.ModelTimeout))
 		if err != nil {
 			_ = runtime.Close()
-			return nil, fmt.Errorf("parse model timeout: %w", err)
+			return nil, errors.Join(model.ErrInvalidConfig, err)
 		}
 
 		modelConfig := model.Config{
@@ -91,7 +90,7 @@ func New(ctx context.Context, configPath string, options Options) (*Runtime, err
 
 	if options.RequireModel && (runtime.ModelClient == nil || runtime.ModelStreamer == nil) {
 		_ = runtime.Close()
-		return nil, fmt.Errorf("%w: model endpoint and model name are required", model.ErrInvalidConfig)
+		return nil, model.ErrInvalidConfig
 	}
 
 	return runtime, nil

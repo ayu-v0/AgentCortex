@@ -1,7 +1,6 @@
 package http
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/ayu-v0/agent-cortex/internal/memory"
@@ -63,35 +62,35 @@ type qaStreamRequest struct {
 
 func (r qaStreamRequest) validate() error {
 	if strings.TrimSpace(r.AgentID) == "" {
-		return fmt.Errorf("agent_id is required")
+		return model.ErrInvalidRequest
 	}
 	if strings.TrimSpace(r.UserID) == "" {
-		return fmt.Errorf("user_id is required")
+		return model.ErrInvalidRequest
 	}
 	if len(r.Messages) == 0 {
-		return fmt.Errorf("messages is required")
+		return model.ErrInvalidRequest
 	}
 	if len(r.Messages) > messagesMaxCount {
-		return fmt.Errorf("messages exceeds max count %d", messagesMaxCount)
+		return model.ErrInvalidRequest
 	}
 
 	totalChars := 0
-	for i, msg := range r.Messages {
+	for _, msg := range r.Messages {
 		role := model.Role(strings.TrimSpace(msg.Role))
 		if role != model.RoleSystem && role != model.RoleUser && role != model.RoleAssistant {
-			return fmt.Errorf("messages[%d].role must be system, user, or assistant", i)
+			return model.ErrInvalidRequest
 		}
 		content := strings.TrimSpace(msg.Content)
 		if content == "" {
-			return fmt.Errorf("messages[%d].content is required", i)
+			return model.ErrInvalidRequest
 		}
 		totalChars += len([]rune(content))
 	}
 	if totalChars > messagesMaxTotalChars {
-		return fmt.Errorf("messages exceeds max total chars %d", messagesMaxTotalChars)
+		return model.ErrInvalidRequest
 	}
 	if model.Role(strings.TrimSpace(r.Messages[len(r.Messages)-1].Role)) != model.RoleUser {
-		return fmt.Errorf("messages last role must be user")
+		return model.ErrInvalidRequest
 	}
 	return nil
 }
