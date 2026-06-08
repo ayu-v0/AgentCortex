@@ -10,7 +10,8 @@ import (
 )
 
 type Server struct {
-	router *gin.Engine
+	router   *gin.Engine
+	handlers *handlers
 }
 
 func NewServer(service *memory.Service, embedder embedding.Embedder, streamer model.Streamer) *Server {
@@ -19,7 +20,10 @@ func NewServer(service *memory.Service, embedder embedding.Embedder, streamer mo
 
 func newServer(service *memory.Service, embedder embedding.Embedder, streamer model.Streamer, memoryMarkdownDir string) *Server {
 	handlers := newHandlers(service, embedder, streamer, memoryMarkdownDir)
-	return &Server{router: newRouter(handlers)}
+	return &Server{
+		router:   newRouter(handlers),
+		handlers: handlers,
+	}
 }
 
 func (s *Server) Run(addr string) error {

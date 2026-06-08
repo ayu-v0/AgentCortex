@@ -297,6 +297,7 @@ func (h *handlers) ensureMemoryMarkdown(item memory.Memory) error {
 	if err != nil {
 		return err
 	}
+	recordedAt := h.now().UTC()
 
 	h.memoryMarkdownMu.Lock()
 	defer h.memoryMarkdownMu.Unlock()
@@ -306,16 +307,16 @@ func (h *handlers) ensureMemoryMarkdown(item memory.Memory) error {
 		return errors.Join(ErrMemoryMarkdown, err)
 	}
 	if exists {
-		if _, err := utils.AppendMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownAppendContent(item)); err != nil {
+		if _, err := utils.AppendMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownAppendContent(item, recordedAt)); err != nil {
 			return errors.Join(ErrMemoryMarkdown, err)
 		}
 		return nil
 	}
 
-	_, err = utils.CreateMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownContent(item))
+	_, err = utils.CreateMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownContent(item, recordedAt))
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
-			if _, err := utils.AppendMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownAppendContent(item)); err != nil {
+			if _, err := utils.AppendMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownAppendContent(item, recordedAt)); err != nil {
 				return errors.Join(ErrMemoryMarkdown, err)
 			}
 			return nil
@@ -358,23 +359,24 @@ func sanitizeMarkdownFilenamePart(value string) string {
 	return strings.Trim(builder.String(), "_")
 }
 
-func memoryMarkdownContent(item memory.Memory) string {
+func memoryMarkdownContent(item memory.Memory, recordedAt time.Time) string {
 	return fmt.Sprintf(`# Memory
 
 UserID: %s
 AgentID: %s
 
-%s`, item.UserID, item.AgentID, memoryMarkdownEntry(item))
+%s`, item.UserID, item.AgentID, memoryMarkdownEntry(item, recordedAt))
 }
 
-func memoryMarkdownAppendContent(item memory.Memory) string {
-	return "\n---\n\n" + memoryMarkdownEntry(item)
+func memoryMarkdownAppendContent(item memory.Memory, recordedAt time.Time) string {
+	return "\n---\n\n" + memoryMarkdownEntry(item, recordedAt)
 }
 
-func memoryMarkdownEntry(item memory.Memory) string {
+func memoryMarkdownEntry(item memory.Memory, recordedAt time.Time) string {
 	return fmt.Sprintf(`## Memory
 
 MemoryID: %s
+RecordedAt: %s
 
 ## Question
 
@@ -383,5 +385,5 @@ MemoryID: %s
 ## Answer
 
 %s
-`, item.ID, item.Question, item.Answer)
+`, item.ID, recordedAt.Format(time.RFC3339), item.Question, item.Answer)
 }

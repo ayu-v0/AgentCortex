@@ -140,6 +140,7 @@ func TestCreateMemoryReturnsCreatedID(t *testing.T) {
 	backend := &recordingBackend{}
 	markdownDir := t.TempDir()
 	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
+	server.handlers.now = func() time.Time { return time.Date(2026, 6, 8, 9, 30, 0, 0, time.FixedZone("CST", 8*60*60)) }
 
 	body := `{"id":"memory-1","agent_id":"agent-1","user_id":"user-1","question":"question","answer":"answer"}`
 	recorder := performRequest(server, "POST", "/api/v1/memories", body)
@@ -175,7 +176,7 @@ func TestCreateMemoryReturnsCreatedID(t *testing.T) {
 		t.Fatalf("read memory markdown: %v", err)
 	}
 	markdown := string(content)
-	for _, expected := range []string{"UserID: user-1", "AgentID: agent-1", "MemoryID: memory-1", "## Question", "question", "## Answer", "answer"} {
+	for _, expected := range []string{"UserID: user-1", "AgentID: agent-1", "MemoryID: memory-1", "RecordedAt: 2026-06-08T01:30:00Z", "## Question", "question", "## Answer", "answer"} {
 		if !strings.Contains(markdown, expected) {
 			t.Fatalf("expected markdown to contain %q, got %q", expected, markdown)
 		}
@@ -223,6 +224,7 @@ func TestCreateMemoryAppendsExistingMarkdown(t *testing.T) {
 		t.Fatalf("write existing markdown: %v", err)
 	}
 	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
+	server.handlers.now = func() time.Time { return time.Date(2026, 6, 8, 10, 45, 0, 0, time.UTC) }
 
 	body := `{"id":"memory-1","agent_id":"agent-1","user_id":"user-1","question":"question","answer":"answer"}`
 	recorder := performRequest(server, "POST", "/api/v1/memories", body)
@@ -238,7 +240,7 @@ func TestCreateMemoryAppendsExistingMarkdown(t *testing.T) {
 	if !strings.HasPrefix(markdown, "existing\n") {
 		t.Fatalf("expected existing markdown content to remain, got %q", markdown)
 	}
-	for _, expected := range []string{"MemoryID: memory-1", "## Question", "question", "## Answer", "answer"} {
+	for _, expected := range []string{"MemoryID: memory-1", "RecordedAt: 2026-06-08T10:45:00Z", "## Question", "question", "## Answer", "answer"} {
 		if !strings.Contains(markdown, expected) {
 			t.Fatalf("expected appended markdown to contain %q, got %q", expected, markdown)
 		}
@@ -255,6 +257,7 @@ func TestCreateMemoryTreatsConcurrentMarkdownCreateAsSuccess(t *testing.T) {
 		ready:   ready,
 		release: release,
 	}, markdownDir)
+	server.handlers.now = func() time.Time { return time.Date(2026, 6, 8, 11, 0, 0, 0, time.UTC) }
 
 	recorders := make([]*httptest.ResponseRecorder, requestCount)
 	var waitGroup sync.WaitGroup
@@ -302,7 +305,7 @@ func TestCreateMemoryTreatsConcurrentMarkdownCreateAsSuccess(t *testing.T) {
 		t.Fatalf("read memory markdown: %v", err)
 	}
 	markdown := string(content)
-	for _, expected := range []string{"UserID: user-1", "AgentID: agent-1", "## Question", "## Answer"} {
+	for _, expected := range []string{"UserID: user-1", "AgentID: agent-1", "RecordedAt: 2026-06-08T11:00:00Z", "## Question", "## Answer"} {
 		if !strings.Contains(markdown, expected) {
 			t.Fatalf("expected markdown to contain %q, got %q", expected, markdown)
 		}
@@ -324,6 +327,7 @@ func TestCreateMemorySanitizesMarkdownFilename(t *testing.T) {
 	backend := &recordingBackend{}
 	markdownDir := t.TempDir()
 	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
+	server.handlers.now = func() time.Time { return time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC) }
 
 	body := `{"id":"memory-1","agent_id":"agent:1","user_id":"user one","question":"question","answer":"answer"}`
 	recorder := performRequest(server, "POST", "/api/v1/memories", body)
@@ -333,6 +337,30 @@ func TestCreateMemorySanitizesMarkdownFilename(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(markdownDir, "user_one_agent_1_Memory.md")); err != nil {
 		t.Fatalf("expected sanitized markdown filename: %v", err)
+	}
+}
+
+func TestCreateMemoryWritesRecordedAtInUTC(t *testing.T) {
+	backend := &recordingBackend{}
+	markdownDir := t.TempDir()
+	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
+	server.handlers.now = func() time.Time {
+		return time.Date(2026, 6, 8, 21, 4, 5, 0, time.FixedZone("UTC+8", 8*60*60))
+	}
+
+	body := `{"id":"memory-1","agent_id":"agent-1","user_id":"user-1","question":"question","answer":"answer"}`
+	recorder := performRequest(server, "POST", "/api/v1/memories", body)
+
+	if recorder.Code != stdhttp.StatusCreated {
+		t.Fatalf("expected status 201, got %d", recorder.Code)
+	}
+
+	content, err := os.ReadFile(filepath.Join(markdownDir, "user-1_agent-1_Memory.md"))
+	if err != nil {
+		t.Fatalf("read memory markdown: %v", err)
+	}
+	if !strings.Contains(string(content), "RecordedAt: 2026-06-08T13:04:05Z") {
+		t.Fatalf("expected UTC recorded time, got %q", string(content))
 	}
 }
 
