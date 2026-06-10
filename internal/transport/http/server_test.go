@@ -69,12 +69,18 @@ func (b *failingBackend) Save(memory.Memory) error {
 	return errors.New("sqlite secret path")
 }
 
+func (b *failingBackend) FindByID(string) (memory.Memory, bool, error) {
+	return memory.Memory{}, false, nil
+}
+
 func (b *failingBackend) Search(string, string, []float32, int) ([]memory.SearchResult, error) {
 	return nil, errors.New("sqlite secret path")
 }
 
 type recordingBackend struct {
 	saved           memory.Memory
+	saveErr         error
+	saveCalls       int
 	searchAgentID   string
 	searchUserID    string
 	searchEmbedding []float32
@@ -87,8 +93,19 @@ func (b *recordingBackend) Close() error {
 }
 
 func (b *recordingBackend) Save(saved memory.Memory) error {
+	b.saveCalls++
+	if b.saveErr != nil {
+		return b.saveErr
+	}
 	b.saved = saved
 	return nil
+}
+
+func (b *recordingBackend) FindByID(id string) (memory.Memory, bool, error) {
+	if b.saved.ID == id {
+		return b.saved, true, nil
+	}
+	return memory.Memory{}, false, nil
 }
 
 func (b *recordingBackend) Search(agentID string, userID string, embedding []float32, limit int) ([]memory.SearchResult, error) {
@@ -100,23 +117,22 @@ func (b *recordingBackend) Search(agentID string, userID string, embedding []flo
 		return b.searchResults, nil
 	}
 	return []memory.SearchResult{
-		{ID: "memory-1", Content: "database content", Distance: 0.25},
+		{ID: "memory-1", Distance: 0.25, RecordedAt: time.Date(2026, 6, 8, 1, 30, 0, 0, time.UTC)},
 	}, nil
 }
 
-type concurrentCreateBackend struct {
-	ready   chan<- struct{}
-	release <-chan struct{}
-}
+type concurrentCreateBackend struct{}
 
 func (b *concurrentCreateBackend) Close() error {
 	return nil
 }
 
 func (b *concurrentCreateBackend) Save(memory.Memory) error {
-	b.ready <- struct{}{}
-	<-b.release
 	return nil
+}
+
+func (b *concurrentCreateBackend) FindByID(string) (memory.Memory, bool, error) {
+	return memory.Memory{}, false, nil
 }
 
 func (b *concurrentCreateBackend) Search(string, string, []float32, int) ([]memory.SearchResult, error) {
@@ -170,7 +186,7 @@ func TestCreateMemoryReturnsCreatedID(t *testing.T) {
 		t.Fatalf("expected optional embedding to be omitted, got %v", backend.saved.Embedding)
 	}
 
-	markdownPath := filepath.Join(markdownDir, "user-1_agent-1_Memory.md")
+	markdownPath := filepath.Join(markdownDir, "user-1", "agent-1", "2026-06-08_Memory.md")
 	content, err := os.ReadFile(markdownPath)
 	if err != nil {
 		t.Fatalf("read memory markdown: %v", err)
@@ -201,6 +217,7 @@ func TestCreateMemoryAcceptsOptionalEmbedding(t *testing.T) {
 func TestCreateMemoryMasksInternalStoreErrors(t *testing.T) {
 	markdownDir := t.TempDir()
 	server := newTestServerWithMarkdownDir(t, &failingBackend{}, markdownDir)
+	server.handlers.now = func() time.Time { return time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC) }
 
 	body := `{"id":"memory-1","agent_id":"agent-1","user_id":"user-1","question":"question","answer":"answer"}`
 	recorder := performRequest(server, "POST", "/api/v1/memories", body)
@@ -211,18 +228,38 @@ func TestCreateMemoryMasksInternalStoreErrors(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), "sqlite secret path") {
 		t.Fatalf("response leaked internal error: %s", recorder.Body.String())
 	}
-	if _, err := os.Stat(filepath.Join(markdownDir, "user-1_agent-1_Memory.md")); !os.IsNotExist(err) {
-		t.Fatalf("expected markdown not to be created after save failure, got err %v", err)
+	if _, err := os.Stat(filepath.Join(markdownDir, "user-1", "agent-1", "2026-06-08_Memory.md")); err != nil {
+		t.Fatalf("expected markdown to remain available for retry after save failure: %v", err)
+	}
+}
+
+func TestCreateMemoryMarkdownFailureDoesNotSaveDatabase(t *testing.T) {
+	backend := &recordingBackend{}
+	root := t.TempDir()
+	markdownDir := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(markdownDir, []byte("blocked"), 0o644); err != nil {
+		t.Fatalf("write blocking file: %v", err)
+	}
+	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
+	server.handlers.now = func() time.Time { return time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC) }
+
+	body := `{"id":"memory-1","agent_id":"agent-1","user_id":"user-1","question":"question","answer":"answer"}`
+	recorder := performRequest(server, "POST", "/api/v1/memories", body)
+
+	if recorder.Code != stdhttp.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d", recorder.Code)
+	}
+	if backend.saveCalls != 0 {
+		t.Fatalf("expected markdown failure not to save database, got %d calls", backend.saveCalls)
 	}
 }
 
 func TestCreateMemoryAppendsExistingMarkdown(t *testing.T) {
 	backend := &recordingBackend{}
 	markdownDir := t.TempDir()
-	markdownPath := filepath.Join(markdownDir, "user-1_agent-1_Memory.md")
-	if err := os.WriteFile(markdownPath, []byte("existing\n"), 0o644); err != nil {
-		t.Fatalf("write existing markdown: %v", err)
-	}
+	recordedAt := time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC)
+	writeTestMemoryMarkdown(t, markdownDir, memory.Memory{ID: "existing-memory", UserID: "user-1", AgentID: "agent-1", Question: "existing question", Answer: "existing answer", RecordedAt: recordedAt})
+	markdownPath := filepath.Join(markdownDir, "user-1", "agent-1", "2026-06-08_Memory.md")
 	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
 	server.handlers.now = func() time.Time { return time.Date(2026, 6, 8, 10, 45, 0, 0, time.UTC) }
 
@@ -237,8 +274,8 @@ func TestCreateMemoryAppendsExistingMarkdown(t *testing.T) {
 		t.Fatalf("read existing markdown: %v", err)
 	}
 	markdown := string(content)
-	if !strings.HasPrefix(markdown, "existing\n") {
-		t.Fatalf("expected existing markdown content to remain, got %q", markdown)
+	if !strings.Contains(markdown, "MemoryID: existing-memory") {
+		t.Fatalf("expected existing markdown entry to remain, got %q", markdown)
 	}
 	for _, expected := range []string{"MemoryID: memory-1", "RecordedAt: 2026-06-08T10:45:00Z", "## Question", "question", "## Answer", "answer"} {
 		if !strings.Contains(markdown, expected) {
@@ -250,13 +287,8 @@ func TestCreateMemoryAppendsExistingMarkdown(t *testing.T) {
 func TestCreateMemoryTreatsConcurrentMarkdownCreateAsSuccess(t *testing.T) {
 	const requestCount = 32
 
-	ready := make(chan struct{}, requestCount)
-	release := make(chan struct{})
 	markdownDir := t.TempDir()
-	server := newTestServerWithMarkdownDir(t, &concurrentCreateBackend{
-		ready:   ready,
-		release: release,
-	}, markdownDir)
+	server := newTestServerWithMarkdownDir(t, &concurrentCreateBackend{}, markdownDir)
 	server.handlers.now = func() time.Time { return time.Date(2026, 6, 8, 11, 0, 0, 0, time.UTC) }
 
 	recorders := make([]*httptest.ResponseRecorder, requestCount)
@@ -277,10 +309,6 @@ func TestCreateMemoryTreatsConcurrentMarkdownCreateAsSuccess(t *testing.T) {
 		}()
 	}
 
-	for i := 0; i < requestCount; i++ {
-		<-ready
-	}
-	close(release)
 	waitGroup.Wait()
 
 	for i, recorder := range recorders {
@@ -289,18 +317,18 @@ func TestCreateMemoryTreatsConcurrentMarkdownCreateAsSuccess(t *testing.T) {
 		}
 	}
 
-	entries, err := os.ReadDir(markdownDir)
+	entries, err := os.ReadDir(filepath.Join(markdownDir, "user-1", "agent-1"))
 	if err != nil {
 		t.Fatalf("read markdown dir: %v", err)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected one markdown file, got %d", len(entries))
 	}
-	if entries[0].Name() != "user-1_agent-1_Memory.md" {
+	if entries[0].Name() != "2026-06-08_Memory.md" {
 		t.Fatalf("expected memory markdown filename, got %q", entries[0].Name())
 	}
 
-	content, err := os.ReadFile(filepath.Join(markdownDir, "user-1_agent-1_Memory.md"))
+	content, err := os.ReadFile(filepath.Join(markdownDir, "user-1", "agent-1", "2026-06-08_Memory.md"))
 	if err != nil {
 		t.Fatalf("read memory markdown: %v", err)
 	}
@@ -323,7 +351,7 @@ func TestCreateMemoryTreatsConcurrentMarkdownCreateAsSuccess(t *testing.T) {
 	}
 }
 
-func TestCreateMemorySanitizesMarkdownFilename(t *testing.T) {
+func TestCreateMemoryRejectsInvalidPathIDs(t *testing.T) {
 	backend := &recordingBackend{}
 	markdownDir := t.TempDir()
 	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
@@ -332,11 +360,18 @@ func TestCreateMemorySanitizesMarkdownFilename(t *testing.T) {
 	body := `{"id":"memory-1","agent_id":"agent:1","user_id":"user one","question":"question","answer":"answer"}`
 	recorder := performRequest(server, "POST", "/api/v1/memories", body)
 
-	if recorder.Code != stdhttp.StatusCreated {
-		t.Fatalf("expected status 201, got %d", recorder.Code)
+	if recorder.Code != stdhttp.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", recorder.Code)
 	}
-	if _, err := os.Stat(filepath.Join(markdownDir, "user_one_agent_1_Memory.md")); err != nil {
-		t.Fatalf("expected sanitized markdown filename: %v", err)
+	if backend.saveCalls != 0 {
+		t.Fatalf("expected invalid IDs not to reach storage, got %d saves", backend.saveCalls)
+	}
+	entries, err := os.ReadDir(markdownDir)
+	if err != nil {
+		t.Fatalf("read markdown root: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no markdown files for invalid IDs, got %d entries", len(entries))
 	}
 }
 
@@ -355,12 +390,36 @@ func TestCreateMemoryWritesRecordedAtInUTC(t *testing.T) {
 		t.Fatalf("expected status 201, got %d", recorder.Code)
 	}
 
-	content, err := os.ReadFile(filepath.Join(markdownDir, "user-1_agent-1_Memory.md"))
+	content, err := os.ReadFile(filepath.Join(markdownDir, "user-1", "agent-1", "2026-06-08_Memory.md"))
 	if err != nil {
 		t.Fatalf("read memory markdown: %v", err)
 	}
 	if !strings.Contains(string(content), "RecordedAt: 2026-06-08T13:04:05Z") {
 		t.Fatalf("expected UTC recorded time, got %q", string(content))
+	}
+}
+
+func TestCreateMemorySplitsDifferentUTCDates(t *testing.T) {
+	backend := &recordingBackend{}
+	markdownDir := t.TempDir()
+	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
+	now := time.Date(2026, 6, 8, 23, 59, 0, 0, time.UTC)
+	server.handlers.now = func() time.Time { return now }
+
+	first := performRequest(server, "POST", "/api/v1/memories", `{"id":"memory-1","agent_id":"agent-1","user_id":"user-1","question":"q1","answer":"a1"}`)
+	if first.Code != stdhttp.StatusCreated {
+		t.Fatalf("expected first request 201, got %d", first.Code)
+	}
+	now = time.Date(2026, 6, 9, 0, 1, 0, 0, time.UTC)
+	second := performRequest(server, "POST", "/api/v1/memories", `{"id":"memory-2","agent_id":"agent-1","user_id":"user-1","question":"q2","answer":"a2"}`)
+	if second.Code != stdhttp.StatusCreated {
+		t.Fatalf("expected second request 201, got %d", second.Code)
+	}
+
+	for _, filename := range []string{"2026-06-08_Memory.md", "2026-06-09_Memory.md"} {
+		if _, err := os.Stat(filepath.Join(markdownDir, "user-1", "agent-1", filename)); err != nil {
+			t.Fatalf("expected daily file %s: %v", filename, err)
+		}
 	}
 }
 
@@ -401,9 +460,10 @@ func TestSearchMemoryEmbedsQuestionAndForwardsRequest(t *testing.T) {
 	backend := &recordingBackend{}
 	embedder := &fakeEmbedder{vector: embedding.Vector{4, 5, 6, 7}}
 	markdownDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(markdownDir, "user-1_agent-1_Memory.md"), []byte("MemoryID: other-memory\n"), 0o644); err != nil {
-		t.Fatalf("write markdown: %v", err)
-	}
+	writeTestMemoryMarkdown(t, markdownDir, memory.Memory{
+		ID: "memory-1", UserID: "user-1", AgentID: "agent-1", Question: "question", Answer: "answer",
+		RecordedAt: time.Date(2026, 6, 8, 1, 30, 0, 0, time.UTC),
+	})
 	server := newTestServerWithMarkdownDirAndEmbedder(t, backend, markdownDir, embedder)
 
 	body := `{"agent_id":"agent-1","user_id":"user-1","question":"where is it?"}`
@@ -412,7 +472,7 @@ func TestSearchMemoryEmbedsQuestionAndForwardsRequest(t *testing.T) {
 	if recorder.Code != stdhttp.StatusOK {
 		t.Fatalf("expected status 200, got %d", recorder.Code)
 	}
-	if !strings.Contains(recorder.Body.String(), `"results":[{"id":"memory-1","content":"database content","distance":0.25}]`) {
+	if !strings.Contains(recorder.Body.String(), `"results":[{"id":"memory-1","content":"## Memory\n\nMemoryID: memory-1`) {
 		t.Fatalf("unexpected body: %s", recorder.Body.String())
 	}
 	if embedder.input != "where is it?" {
@@ -433,52 +493,19 @@ func TestSearchMemoryEmbedsQuestionAndForwardsRequest(t *testing.T) {
 }
 
 func TestSearchMemoryReplacesDatabaseContentFromMarkdownEntry(t *testing.T) {
+	recordedAt := time.Date(2026, 6, 8, 1, 30, 0, 0, time.UTC)
 	backend := &recordingBackend{
 		searchResults: []memory.SearchResult{
-			{ID: "memory-2", Content: "database content 2", Distance: 0.1},
-			{ID: "memory-1", Content: "database content 1", Distance: 0.2},
-			{ID: "memory-3", Content: "database content 3", Distance: 0.3},
+			{ID: "memory-2", Distance: 0.1, RecordedAt: recordedAt},
+			{ID: "memory-1", Distance: 0.2, RecordedAt: recordedAt},
 		},
 	}
 	markdownDir := t.TempDir()
-	markdownPath := filepath.Join(markdownDir, "user-1_agent-1_Memory.md")
-	markdown := `# Memory
-
-UserID: user-1
-AgentID: agent-1
-
-## Memory
-
-MemoryID: memory-1
-
-## Question
-
-first question
-
-## Answer
-
-first answer
-
----
-
-## Memory
-
-MemoryID: memory-2
-
-## Question
-
-second question
-
-## Answer
-
-second answer
-`
-	if err := os.WriteFile(markdownPath, []byte(markdown), 0o644); err != nil {
-		t.Fatalf("write markdown: %v", err)
-	}
+	writeTestMemoryMarkdown(t, markdownDir, memory.Memory{ID: "memory-1", UserID: "user-1", AgentID: "agent-1", Question: "first question", Answer: "first answer", RecordedAt: recordedAt})
+	writeTestMemoryMarkdown(t, markdownDir, memory.Memory{ID: "memory-2", UserID: "user-1", AgentID: "agent-1", Question: "second question", Answer: "second answer", RecordedAt: recordedAt})
 	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
 
-	body := `{"agent_id":"agent-1","user_id":"user-1","question":"question","limit":3}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","question":"question","limit":2}`
 	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
 
 	if recorder.Code != stdhttp.StatusOK {
@@ -490,11 +517,34 @@ second answer
 		`"distance":0.1}`,
 		`{"id":"memory-1","content":"## Memory\n\nMemoryID: memory-1`,
 		`"distance":0.2}`,
-		`{"id":"memory-3","content":"database content 3","distance":0.3}`,
 	} {
 		if !strings.Contains(bodyText, expected) {
 			t.Fatalf("expected response to contain %q, got %s", expected, bodyText)
 		}
+	}
+}
+
+func TestSearchMemoryReadsCandidatesAcrossDailyFiles(t *testing.T) {
+	firstDate := time.Date(2026, 6, 8, 1, 30, 0, 0, time.UTC)
+	secondDate := time.Date(2026, 6, 9, 1, 30, 0, 0, time.UTC)
+	backend := &recordingBackend{searchResults: []memory.SearchResult{
+		{ID: "memory-2", Distance: 0.1, RecordedAt: secondDate},
+		{ID: "memory-1", Distance: 0.2, RecordedAt: firstDate},
+	}}
+	markdownDir := t.TempDir()
+	writeTestMemoryMarkdown(t, markdownDir, memory.Memory{ID: "memory-1", UserID: "user-1", AgentID: "agent-1", Question: "first", Answer: "answer", RecordedAt: firstDate})
+	writeTestMemoryMarkdown(t, markdownDir, memory.Memory{ID: "memory-2", UserID: "user-1", AgentID: "agent-1", Question: "second", Answer: "answer", RecordedAt: secondDate})
+	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
+
+	recorder := performRequest(server, "POST", "/api/v1/memories/search", `{"agent_id":"agent-1","user_id":"user-1","question":"question","limit":2}`)
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	secondIndex := strings.Index(body, `"id":"memory-2"`)
+	firstIndex := strings.Index(body, `"id":"memory-1"`)
+	if secondIndex < 0 || firstIndex < 0 || secondIndex > firstIndex {
+		t.Fatalf("expected vector result order to be preserved, got %s", body)
 	}
 }
 
@@ -523,8 +573,24 @@ func TestSearchMemoryMasksMissingMarkdownFile(t *testing.T) {
 	if recorder.Code != stdhttp.StatusInternalServerError {
 		t.Fatalf("expected status 500, got %d", recorder.Code)
 	}
-	if strings.Contains(recorder.Body.String(), "user-1_agent-1_Memory.md") {
+	if strings.Contains(recorder.Body.String(), "2026-06-08_Memory.md") {
 		t.Fatalf("response leaked markdown path: %s", recorder.Body.String())
+	}
+}
+
+func TestSearchMemoryFailsWholeRequestWhenOneEntryIsMissing(t *testing.T) {
+	recordedAt := time.Date(2026, 6, 8, 1, 30, 0, 0, time.UTC)
+	backend := &recordingBackend{searchResults: []memory.SearchResult{
+		{ID: "memory-1", Distance: 0.1, RecordedAt: recordedAt},
+		{ID: "missing", Distance: 0.2, RecordedAt: recordedAt},
+	}}
+	markdownDir := t.TempDir()
+	writeTestMemoryMarkdown(t, markdownDir, memory.Memory{ID: "memory-1", UserID: "user-1", AgentID: "agent-1", Question: "question", Answer: "answer", RecordedAt: recordedAt})
+	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
+
+	recorder := performRequest(server, "POST", "/api/v1/memories/search", `{"agent_id":"agent-1","user_id":"user-1","question":"question","limit":2}`)
+	if recorder.Code != stdhttp.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -559,6 +625,123 @@ func TestQAStreamReturnsTextDeltasAndPersistsMemory(t *testing.T) {
 	}
 	if backend.saved.Question != "question" || backend.saved.Answer != "hello world" {
 		t.Fatalf("expected saved memory question/answer, got %#v", backend.saved)
+	}
+}
+
+func TestCreateMemoryRetriesSQLiteWithoutDuplicatingMarkdown(t *testing.T) {
+	backend := &recordingBackend{saveErr: errors.New("sqlite unavailable")}
+	markdownDir := t.TempDir()
+	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
+	server.handlers.now = func() time.Time { return time.Date(2026, 6, 8, 1, 30, 0, 0, time.UTC) }
+	body := `{"id":"memory-1","agent_id":"agent-1","user_id":"user-1","question":"question","answer":"answer"}`
+
+	first := performRequest(server, "POST", "/api/v1/memories", body)
+	if first.Code != stdhttp.StatusInternalServerError {
+		t.Fatalf("expected first request status 500, got %d", first.Code)
+	}
+	backend.saveErr = nil
+	second := performRequest(server, "POST", "/api/v1/memories", body)
+	if second.Code != stdhttp.StatusCreated {
+		t.Fatalf("expected retry status 201, got %d: %s", second.Code, second.Body.String())
+	}
+
+	content, err := os.ReadFile(filepath.Join(markdownDir, "user-1", "agent-1", "2026-06-08_Memory.md"))
+	if err != nil {
+		t.Fatalf("read markdown: %v", err)
+	}
+	if count := strings.Count(string(content), "<!-- MemoryEntry:BEGIN id=memory-1 "); count != 1 {
+		t.Fatalf("expected one markdown entry after retry, got %d", count)
+	}
+	if backend.saveCalls != 2 {
+		t.Fatalf("expected two database save attempts, got %d", backend.saveCalls)
+	}
+}
+
+func TestCreateMemorySameContentIsIdempotent(t *testing.T) {
+	backend := &recordingBackend{}
+	markdownDir := t.TempDir()
+	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
+	server.handlers.now = func() time.Time { return time.Date(2026, 6, 8, 1, 30, 0, 0, time.UTC) }
+	body := `{"id":"memory-1","agent_id":"agent-1","user_id":"user-1","question":"question","answer":"answer"}`
+
+	for i := 0; i < 2; i++ {
+		recorder := performRequest(server, "POST", "/api/v1/memories", body)
+		if recorder.Code != stdhttp.StatusCreated {
+			t.Fatalf("request %d expected 201, got %d: %s", i, recorder.Code, recorder.Body.String())
+		}
+	}
+	content, err := os.ReadFile(filepath.Join(markdownDir, "user-1", "agent-1", "2026-06-08_Memory.md"))
+	if err != nil {
+		t.Fatalf("read markdown: %v", err)
+	}
+	if count := strings.Count(string(content), "<!-- MemoryEntry:BEGIN id=memory-1 "); count != 1 {
+		t.Fatalf("expected one markdown entry, got %d", count)
+	}
+	if backend.saveCalls != 1 {
+		t.Fatalf("expected one database save, got %d", backend.saveCalls)
+	}
+}
+
+func TestCreateMemoryRejectsSameIDDifferentContent(t *testing.T) {
+	backend := &recordingBackend{}
+	markdownDir := t.TempDir()
+	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
+	server.handlers.now = func() time.Time { return time.Date(2026, 6, 8, 1, 30, 0, 0, time.UTC) }
+
+	first := performRequest(server, "POST", "/api/v1/memories", `{"id":"memory-1","agent_id":"agent-1","user_id":"user-1","question":"question","answer":"answer"}`)
+	if first.Code != stdhttp.StatusCreated {
+		t.Fatalf("expected first request 201, got %d", first.Code)
+	}
+	second := performRequest(server, "POST", "/api/v1/memories", `{"id":"memory-1","agent_id":"agent-1","user_id":"user-1","question":"question","answer":"different"}`)
+	if second.Code != stdhttp.StatusConflict {
+		t.Fatalf("expected conflict status 409, got %d: %s", second.Code, second.Body.String())
+	}
+	if backend.saveCalls != 1 {
+		t.Fatalf("expected conflict not to save again, got %d calls", backend.saveCalls)
+	}
+}
+
+func TestQAStreamReportsMarkdownSyncedWhenSQLiteSaveFails(t *testing.T) {
+	backend := &recordingBackend{saveErr: errors.New("sqlite unavailable")}
+	server := newTestServerWithMarkdownDirAndDependencies(t, backend, t.TempDir(), &fakeEmbedder{}, &fakeStreamer{
+		events: []model.StreamEvent{{TextDelta: "answer", FinishReason: "stop"}},
+	})
+
+	recorder := performRequest(server, "POST", "/api/v1/qa/stream", `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"user","content":"question"}]}`)
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	response := recorder.Body.String()
+	for _, expected := range []string{`event: warning`, `"memory_saved":false`, `"markdown_synced":true`} {
+		if !strings.Contains(response, expected) {
+			t.Fatalf("expected response to contain %q, got %s", expected, response)
+		}
+	}
+}
+
+func TestQAStreamReportsMarkdownFailureWithoutSavingDatabase(t *testing.T) {
+	backend := &recordingBackend{}
+	root := t.TempDir()
+	markdownDir := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(markdownDir, []byte("blocked"), 0o644); err != nil {
+		t.Fatalf("write blocking file: %v", err)
+	}
+	server := newTestServerWithMarkdownDirAndDependencies(t, backend, markdownDir, &fakeEmbedder{}, &fakeStreamer{
+		events: []model.StreamEvent{{TextDelta: "answer", FinishReason: "stop"}},
+	})
+
+	recorder := performRequest(server, "POST", "/api/v1/qa/stream", `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"user","content":"question"}]}`)
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	response := recorder.Body.String()
+	for _, expected := range []string{`event: warning`, `"memory_saved":false`, `"markdown_synced":false`} {
+		if !strings.Contains(response, expected) {
+			t.Fatalf("expected response to contain %q, got %s", expected, response)
+		}
+	}
+	if backend.saveCalls != 0 {
+		t.Fatalf("expected markdown failure not to call database save, got %d", backend.saveCalls)
 	}
 }
 
@@ -677,8 +860,19 @@ func TestStatusFromErrorMapsMemoryValidationErrors(t *testing.T) {
 	if status := statusFromError(embedding.ErrProviderUnavailable); status != stdhttp.StatusInternalServerError {
 		t.Fatalf("expected status 500, got %d", status)
 	}
+	if status := statusFromError(memory.ErrMemoryConflict); status != stdhttp.StatusConflict {
+		t.Fatalf("expected status 409, got %d", status)
+	}
 	if status := statusFromError(errors.New("unknown")); status != stdhttp.StatusInternalServerError {
 		t.Fatalf("expected status 500, got %d", status)
+	}
+}
+
+func writeTestMemoryMarkdown(t *testing.T, baseDir string, item memory.Memory) {
+	t.Helper()
+	item.StorageVersion = memory.DailyMarkdownStorageVersion
+	if err := writeMemoryMarkdown(baseDir, item); err != nil {
+		t.Fatalf("write test memory markdown: %v", err)
 	}
 }
 

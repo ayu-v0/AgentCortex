@@ -61,10 +61,10 @@ type qaStreamRequest struct {
 }
 
 func (r qaStreamRequest) validate() error {
-	if strings.TrimSpace(r.AgentID) == "" {
+	if err := validateMemoryPathID(r.AgentID); err != nil {
 		return model.ErrInvalidRequest
 	}
-	if strings.TrimSpace(r.UserID) == "" {
+	if err := validateMemoryPathID(r.UserID); err != nil {
 		return model.ErrInvalidRequest
 	}
 	if len(r.Messages) == 0 {

@@ -5,6 +5,7 @@ import "reflect"
 type Backend interface {
 	Close() error
 	Save(memory Memory) error
+	FindByID(id string) (Memory, bool, error)
 	Search(agentID string, userID string, embedding []float32, limit int) ([]SearchResult, error)
 }
 
@@ -32,6 +33,10 @@ func (s *Service) Close() error {
 
 func (s *Service) Save(memory Memory) error {
 	return s.store.Save(memory)
+}
+
+func (s *Service) FindByID(id string) (Memory, bool, error) {
+	return s.backend.FindByID(id)
 }
 
 func (s *Service) Search(agentID string, userID string, embedding []float32, limit int) ([]SearchResult, error) {

@@ -1,22 +1,18 @@
 package http
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	stdhttp "net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode"
 
 	"github.com/ayu-v0/agent-cortex/internal/embedding"
 	"github.com/ayu-v0/agent-cortex/internal/memory"
 	"github.com/ayu-v0/agent-cortex/internal/model"
-	"github.com/ayu-v0/agent-cortex/internal/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -66,6 +62,14 @@ func (h *handlers) createMemory(c *gin.Context) {
 		writeErrorJSON(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
+	if err := validateMemoryPathID(req.UserID); err != nil {
+		writeHTTPError(c, err)
+		return
+	}
+	if err := validateMemoryPathID(req.AgentID); err != nil {
+		writeHTTPError(c, err)
+		return
+	}
 
 	if _, err := h.saveMemory(req.toMemory()); err != nil {
 		writeHTTPError(c, err)
@@ -79,6 +83,14 @@ func (h *handlers) searchMemory(c *gin.Context) {
 	var req searchMemoryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		writeErrorJSON(c, stdhttp.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateMemoryPathID(req.UserID); err != nil {
+		writeHTTPError(c, err)
+		return
+	}
+	if err := validateMemoryPathID(req.AgentID); err != nil {
+		writeHTTPError(c, err)
 		return
 	}
 
@@ -206,6 +218,7 @@ func (h *handlers) persistQATurn(c *gin.Context, req qaStreamRequest, question, 
 	}
 
 	result, err := h.saveMemory(item)
+	finished.MarkdownSynced = result.markdownSynced
 	if err != nil {
 		if writeErr := writeSSE(c, "warning", qaWarningEvent{Message: fmt.Sprintf("memory save failed: %v", publicMessageFromError(err))}); writeErr != nil {
 			return writeErr
@@ -215,12 +228,6 @@ func (h *handlers) persistQATurn(c *gin.Context, req qaStreamRequest, question, 
 
 	finished.MemoryID = item.ID
 	finished.MemorySaved = true
-	finished.MarkdownSynced = result.markdownSynced
-	if !result.markdownSynced {
-		if writeErr := writeSSE(c, "warning", qaWarningEvent{Message: "memory markdown sync failed"}); writeErr != nil {
-			return writeErr
-		}
-	}
 	return nil
 }
 
@@ -229,16 +236,77 @@ type saveMemoryResult struct {
 }
 
 func (h *handlers) saveMemory(item memory.Memory) (saveMemoryResult, error) {
-	if err := h.memoryService.Save(item); err != nil {
+	item = normalizeMemory(item)
+	if err := validateMemoryPathID(item.UserID); err != nil {
 		return saveMemoryResult{}, err
 	}
+	if err := validateMemoryPathID(item.AgentID); err != nil {
+		return saveMemoryResult{}, err
+	}
+	if err := validateMemoryMarkerID(item.ID); err != nil {
+		return saveMemoryResult{}, err
+	}
+	item.RecordedAt = h.now().UTC()
+	item.StorageVersion = memory.DailyMarkdownStorageVersion
 
-	if err := h.ensureMemoryMarkdown(item); err != nil {
+	h.memoryMarkdownMu.Lock()
+	defer h.memoryMarkdownMu.Unlock()
+
+	stored, found, err := h.memoryService.FindByID(item.ID)
+	if err != nil {
+		return saveMemoryResult{}, err
+	}
+	if found {
+		if stored.StorageVersion != memory.DailyMarkdownStorageVersion || !memory.SameContent(stored, item) {
+			return saveMemoryResult{}, memory.ErrMemoryConflict
+		}
+		if stored.RecordedAt.IsZero() {
+			return saveMemoryResult{}, ErrMemoryMarkdown
+		}
+		entry, ok, err := h.readMemoryMarkdownEntry(stored.UserID, stored.AgentID, stored.RecordedAt, stored.ID)
+		if err != nil {
+			return saveMemoryResult{}, err
+		}
+		if !ok || !parsedEntryMatchesMemory(entry, item) {
+			return saveMemoryResult{}, ErrMemoryMarkdown
+		}
+		return saveMemoryResult{markdownSynced: true}, nil
+	}
+
+	orphan, found, err := findMemoryMarkdownEntry(h.memoryMarkdownDir, item.UserID, item.AgentID, item.ID)
+	if err != nil {
+		return saveMemoryResult{}, err
+	}
+	if found {
+		if !parsedEntryMatchesMemory(orphan, item) {
+			return saveMemoryResult{}, memory.ErrMemoryConflict
+		}
+		item.RecordedAt = orphan.RecordedAt
+		if err := h.memoryService.Save(item); err != nil {
+			return saveMemoryResult{markdownSynced: true}, err
+		}
+		return saveMemoryResult{markdownSynced: true}, nil
+	}
+
+	if err := writeMemoryMarkdown(h.memoryMarkdownDir, item); err != nil {
 		log.Printf("memory markdown error: %v", err)
-		return saveMemoryResult{markdownSynced: false}, nil
+		return saveMemoryResult{markdownSynced: false}, err
+	}
+	if err := h.memoryService.Save(item); err != nil {
+		return saveMemoryResult{markdownSynced: true}, err
 	}
 
 	return saveMemoryResult{markdownSynced: true}, nil
+}
+
+func normalizeMemory(item memory.Memory) memory.Memory {
+	item.ID = strings.TrimSpace(item.ID)
+	item.AgentID = strings.TrimSpace(item.AgentID)
+	item.UserID = strings.TrimSpace(item.UserID)
+	item.Question = strings.TrimSpace(item.Question)
+	item.Answer = strings.TrimSpace(item.Answer)
+	item.Content = strings.TrimSpace(item.Question + "\n" + item.Answer)
+	return item
 }
 
 func (h *handlers) nextMemoryID() string {
@@ -247,38 +315,36 @@ func (h *handlers) nextMemoryID() string {
 }
 
 func (h *handlers) replaceSearchContentFromMarkdown(userID, agentID string, results []memory.SearchResult) error {
-	filename, err := memoryMarkdownFilename(userID, agentID)
-	if err != nil {
-		return err
-	}
-
-	content, err := os.ReadFile(filepath.Join(h.memoryMarkdownDir, filename))
-	if err != nil {
-		return errors.Join(ErrMemoryMarkdown, err)
-	}
-
-	entries := memoryMarkdownEntriesByID(string(content))
+	byPath := make(map[string][]int)
 	for i := range results {
-		if entry, ok := entries[results[i].ID]; ok {
-			results[i].Content = entry
+		if results[i].RecordedAt.IsZero() {
+			return ErrMemoryMarkdown
+		}
+		dir, filename, err := memoryMarkdownDailyPath(h.memoryMarkdownDir, userID, agentID, results[i].RecordedAt)
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(dir, filename)
+		byPath[path] = append(byPath[path], i)
+	}
+
+	h.memoryMarkdownMu.Lock()
+	defer h.memoryMarkdownMu.Unlock()
+
+	for path, indexes := range byPath {
+		entries, err := readMemoryMarkdownEntries(path)
+		if err != nil {
+			return err
+		}
+		for _, index := range indexes {
+			entry, ok := entries[results[index].ID]
+			if !ok {
+				return ErrMemoryMarkdown
+			}
+			results[index].Content = entry.Content
 		}
 	}
 	return nil
-}
-
-func memoryMarkdownEntriesByID(content string) map[string]string {
-	entries := make(map[string]string)
-	for _, chunk := range strings.Split(content, "\n---\n") {
-		entry := strings.TrimSpace(chunk)
-		if start := strings.Index(entry, "## Memory\n"); start >= 0 {
-			entry = entry[start:]
-		}
-		id, ok := memoryIDFromMarkdownEntry(entry)
-		if ok {
-			entries[id] = entry
-		}
-	}
-	return entries
 }
 
 func memoryIDFromMarkdownEntry(entry string) (string, bool) {
@@ -292,98 +358,15 @@ func memoryIDFromMarkdownEntry(entry string) (string, bool) {
 	return "", false
 }
 
-func (h *handlers) ensureMemoryMarkdown(item memory.Memory) error {
-	filename, err := memoryMarkdownFilename(item.UserID, item.AgentID)
+func (h *handlers) readMemoryMarkdownEntry(userID, agentID string, recordedAt time.Time, memoryID string) (parsedMemoryMarkdownEntry, bool, error) {
+	dir, filename, err := memoryMarkdownDailyPath(h.memoryMarkdownDir, userID, agentID, recordedAt)
 	if err != nil {
-		return err
+		return parsedMemoryMarkdownEntry{}, false, err
 	}
-	recordedAt := h.now().UTC()
-
-	h.memoryMarkdownMu.Lock()
-	defer h.memoryMarkdownMu.Unlock()
-
-	exists, err := utils.MarkdownFileExists(h.memoryMarkdownDir, filename)
+	entries, err := readMemoryMarkdownEntries(filepath.Join(dir, filename))
 	if err != nil {
-		return errors.Join(ErrMemoryMarkdown, err)
+		return parsedMemoryMarkdownEntry{}, false, err
 	}
-	if exists {
-		if _, err := utils.AppendMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownAppendContent(item, recordedAt)); err != nil {
-			return errors.Join(ErrMemoryMarkdown, err)
-		}
-		return nil
-	}
-
-	_, err = utils.CreateMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownContent(item, recordedAt))
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			if _, err := utils.AppendMarkdownFile(h.memoryMarkdownDir, filename, memoryMarkdownAppendContent(item, recordedAt)); err != nil {
-				return errors.Join(ErrMemoryMarkdown, err)
-			}
-			return nil
-		}
-		return errors.Join(ErrMemoryMarkdown, err)
-	}
-	return nil
-}
-
-func memoryMarkdownFilename(userID, agentID string) (string, error) {
-	userID = sanitizeMarkdownFilenamePart(userID)
-	agentID = sanitizeMarkdownFilenamePart(agentID)
-	if userID == "" || agentID == "" {
-		return "", model.ErrInvalidRequest
-	}
-	return userID + "_" + agentID + "_Memory.md", nil
-}
-
-func sanitizeMarkdownFilenamePart(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-
-	var builder strings.Builder
-	lastUnderscore := false
-	for _, r := range value {
-		allowed := unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_'
-		if allowed {
-			builder.WriteRune(r)
-			lastUnderscore = false
-			continue
-		}
-		if !lastUnderscore {
-			builder.WriteByte('_')
-			lastUnderscore = true
-		}
-	}
-
-	return strings.Trim(builder.String(), "_")
-}
-
-func memoryMarkdownContent(item memory.Memory, recordedAt time.Time) string {
-	return fmt.Sprintf(`# Memory
-
-UserID: %s
-AgentID: %s
-
-%s`, item.UserID, item.AgentID, memoryMarkdownEntry(item, recordedAt))
-}
-
-func memoryMarkdownAppendContent(item memory.Memory, recordedAt time.Time) string {
-	return "\n---\n\n" + memoryMarkdownEntry(item, recordedAt)
-}
-
-func memoryMarkdownEntry(item memory.Memory, recordedAt time.Time) string {
-	return fmt.Sprintf(`## Memory
-
-MemoryID: %s
-RecordedAt: %s
-
-## Question
-
-%s
-
-## Answer
-
-%s
-`, item.ID, recordedAt.Format(time.RFC3339), item.Question, item.Answer)
+	entry, ok := entries[memoryID]
+	return entry, ok, nil
 }

@@ -12,9 +12,11 @@ func (b *Backend) migrate() error {
 
 func (b *Backend) ensureMemoryColumns() error {
 	columns := map[string]string{
-		"user_id":  "TEXT NOT NULL DEFAULT ''",
-		"question": "TEXT NOT NULL DEFAULT ''",
-		"answer":   "TEXT NOT NULL DEFAULT ''",
+		"user_id":         "TEXT NOT NULL DEFAULT ''",
+		"question":        "TEXT NOT NULL DEFAULT ''",
+		"answer":          "TEXT NOT NULL DEFAULT ''",
+		"recorded_at":     "TEXT NOT NULL DEFAULT ''",
+		"storage_version": "INTEGER NOT NULL DEFAULT 0",
 	}
 
 	for name, definition := range columns {
@@ -59,11 +61,11 @@ func (b *Backend) memoryColumnExists(name string) (bool, error) {
 }
 
 func (b *Backend) ensureMemoryVectorSchema() error {
-	hasAgentID, hasUserID, err := b.memoryVectorPartitionColumnsExist()
+	hasAgentID, hasUserID, hasStorageVersion, err := b.memoryVectorPartitionColumnsExist()
 	if err != nil {
 		return err
 	}
-	if hasAgentID && hasUserID {
+	if hasAgentID && hasUserID && hasStorageVersion {
 		return nil
 	}
 
@@ -89,15 +91,16 @@ func (b *Backend) ensureMemoryVectorSchema() error {
 	return err
 }
 
-func (b *Backend) memoryVectorPartitionColumnsExist() (bool, bool, error) {
+func (b *Backend) memoryVectorPartitionColumnsExist() (bool, bool, bool, error) {
 	rows, err := b.db.Query("PRAGMA table_info(memory_vectors)")
 	if err != nil {
-		return false, false, err
+		return false, false, false, err
 	}
 	defer rows.Close()
 
 	hasAgentID := false
 	hasUserID := false
+	hasStorageVersion := false
 	for rows.Next() {
 		var (
 			cid        int
@@ -108,19 +111,21 @@ func (b *Backend) memoryVectorPartitionColumnsExist() (bool, bool, error) {
 			primaryKey int
 		)
 		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultVal, &primaryKey); err != nil {
-			return false, false, err
+			return false, false, false, err
 		}
 		switch columnName {
 		case "agent_id":
 			hasAgentID = true
 		case "user_id":
 			hasUserID = true
+		case "storage_version":
+			hasStorageVersion = true
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return false, false, err
+		return false, false, false, err
 	}
-	return hasAgentID, hasUserID, nil
+	return hasAgentID, hasUserID, hasStorageVersion, nil
 }
 
 func (b *Backend) memoryVectorTableExists() (bool, error) {
@@ -161,8 +166,8 @@ func (b *Backend) stageMemoryVectorsForMigration(tableExists bool) error {
 
 func (b *Backend) restoreStagedMemoryVectors() error {
 	_, err := b.db.Exec(`
-		INSERT INTO memory_vectors (memory_id, agent_id, user_id, embedding)
-		SELECT s.memory_id, m.agent_id, m.user_id, s.embedding
+		INSERT INTO memory_vectors (memory_id, agent_id, user_id, storage_version, embedding)
+		SELECT s.memory_id, m.agent_id, m.user_id, m.storage_version, s.embedding
 		FROM temp.memory_vectors_migration s
 		JOIN memories m ON m.id = s.memory_id
 	`)

@@ -56,6 +56,10 @@ func (b *integrationBackend) Save(item memory.Memory) error {
 	return nil
 }
 
+func (b *integrationBackend) FindByID(string) (memory.Memory, bool, error) {
+	return memory.Memory{}, false, nil
+}
+
 func (b *integrationBackend) Search(string, string, []float32, int) ([]memory.SearchResult, error) {
 	return nil, nil
 }

@@ -32,6 +32,8 @@ func statusFromError(err error) int {
 		errors.Is(err, model.ErrInvalidRequest),
 		errors.Is(err, model.ErrEmptyMessages):
 		return stdhttp.StatusBadRequest
+	case errors.Is(err, memory.ErrMemoryConflict):
+		return stdhttp.StatusConflict
 	default:
 		return stdhttp.StatusInternalServerError
 	}

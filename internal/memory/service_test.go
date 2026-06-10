@@ -11,6 +11,8 @@ type fakeBackend struct {
 	searchAgentID string
 	searchUserID  string
 	searchLimit   int
+	foundMemory   Memory
+	found         bool
 }
 
 func (b *fakeBackend) Close() error {
@@ -21,6 +23,10 @@ func (b *fakeBackend) Close() error {
 func (b *fakeBackend) Save(memory Memory) error {
 	b.savedMemory = memory
 	return nil
+}
+
+func (b *fakeBackend) FindByID(string) (Memory, bool, error) {
+	return b.foundMemory, b.found, nil
 }
 
 func (b *fakeBackend) Search(agentID string, userID string, embedding []float32, limit int) ([]SearchResult, error) {
@@ -71,6 +77,21 @@ func TestServiceSearchForwardsUserAndDefaultLimit(t *testing.T) {
 	}
 	if backend.searchLimit != 10 {
 		t.Fatalf("expected default search limit 10, got %d", backend.searchLimit)
+	}
+}
+
+func TestSameContentIgnoresEmbeddingAndRecordedMetadata(t *testing.T) {
+	left := Memory{ID: "memory-1", AgentID: "agent-1", UserID: "user-1", Question: "question", Answer: "answer", Embedding: []float32{1}}
+	right := left
+	right.Embedding = []float32{2}
+	right.StorageVersion = DailyMarkdownStorageVersion
+
+	if !SameContent(left, right) {
+		t.Fatal("expected memories with the same business content to match")
+	}
+	right.Answer = "different"
+	if SameContent(left, right) {
+		t.Fatal("expected different answers not to match")
 	}
 }
 
