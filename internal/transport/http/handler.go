@@ -13,6 +13,7 @@ import (
 	"github.com/ayu-v0/agent-cortex/internal/embedding"
 	"github.com/ayu-v0/agent-cortex/internal/memory"
 	"github.com/ayu-v0/agent-cortex/internal/model"
+	"github.com/ayu-v0/agent-cortex/internal/retrieval"
 	"github.com/gin-gonic/gin"
 )
 
@@ -32,13 +33,19 @@ type handlers struct {
 	memoryService     *memory.Service
 	embedder          embedding.Embedder
 	modelStreamer     model.Streamer
+	retrievalService  *retrieval.Service
+	conversations     conversationRecorder
 	memoryMarkdownDir string
 	memoryMarkdownMu  sync.Mutex
 	memoryIDSeq       atomic.Uint64
 	now               func() time.Time
 }
 
-func newHandlers(service *memory.Service, embedder embedding.Embedder, streamer model.Streamer, memoryMarkdownDir string) *handlers {
+type conversationRecorder interface {
+	AppendCompletedTurn(userID, agentID, sessionID, question, answer string) error
+}
+
+func newHandlers(service *memory.Service, embedder embedding.Embedder, streamer model.Streamer, retrievalService *retrieval.Service, conversations conversationRecorder, memoryMarkdownDir string) *handlers {
 	memoryMarkdownDir = strings.TrimSpace(memoryMarkdownDir)
 	if memoryMarkdownDir == "" {
 		memoryMarkdownDir = defaultMemoryMarkdownDir
@@ -47,6 +54,8 @@ func newHandlers(service *memory.Service, embedder embedding.Embedder, streamer 
 		memoryService:     service,
 		embedder:          embedder,
 		modelStreamer:     streamer,
+		retrievalService:  retrievalService,
+		conversations:     conversations,
 		memoryMarkdownDir: memoryMarkdownDir,
 		now:               time.Now,
 	}
@@ -91,6 +100,26 @@ func (h *handlers) searchMemory(c *gin.Context) {
 	}
 	if err := validateMemoryPathID(req.AgentID); err != nil {
 		writeHTTPError(c, err)
+		return
+	}
+	if err := validateSessionID(req.SessionID); err != nil {
+		writeHTTPError(c, err)
+		return
+	}
+
+	if h.retrievalService != nil {
+		results, err := h.retrievalService.Retrieve(c.Request.Context(), retrieval.Request{
+			AgentID:   req.AgentID,
+			UserID:    req.UserID,
+			SessionID: req.SessionID,
+			Question:  req.Question,
+			Limit:     req.searchLimit(),
+		})
+		if err != nil {
+			writeHTTPError(c, err)
+			return
+		}
+		writeJSON(c, stdhttp.StatusOK, searchMemoryResponse{Results: results})
 		return
 	}
 
@@ -197,6 +226,15 @@ func (h *handlers) qaStream(c *gin.Context) {
 func (h *handlers) persistQATurn(c *gin.Context, req qaStreamRequest, question, answer string, finished *qaFinishedEvent) error {
 	if strings.TrimSpace(answer) == "" {
 		return nil
+	}
+
+	if h.conversations != nil {
+		if err := h.conversations.AppendCompletedTurn(req.UserID, req.AgentID, req.SessionID, question, answer); err != nil {
+			log.Printf("conversation history save failed: %v", err)
+			if writeErr := writeSSE(c, "warning", qaWarningEvent{Message: "conversation history save failed"}); writeErr != nil {
+				return writeErr
+			}
+		}
 	}
 
 	vector, err := h.embedder.Embed(c.Request.Context(), embedding.Input{Text: question})

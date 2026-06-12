@@ -36,10 +36,11 @@ func (r createMemoryRequest) toMemory() memory.Memory {
 }
 
 type searchMemoryRequest struct {
-	AgentID  string `json:"agent_id" binding:"required"`
-	UserID   string `json:"user_id" binding:"required"`
-	Question string `json:"question" binding:"required"`
-	Limit    *int   `json:"limit" binding:"omitempty,min=1,max=100"`
+	AgentID   string `json:"agent_id" binding:"required"`
+	UserID    string `json:"user_id" binding:"required"`
+	SessionID string `json:"session_id" binding:"required"`
+	Question  string `json:"question" binding:"required"`
+	Limit     *int   `json:"limit" binding:"omitempty,min=1,max=100"`
 }
 
 func (r searchMemoryRequest) searchLimit() int {
@@ -55,9 +56,10 @@ type qaMessage struct {
 }
 
 type qaStreamRequest struct {
-	AgentID  string      `json:"agent_id" binding:"required"`
-	UserID   string      `json:"user_id" binding:"required"`
-	Messages []qaMessage `json:"messages" binding:"required,min=1,max=100"`
+	AgentID   string      `json:"agent_id" binding:"required"`
+	UserID    string      `json:"user_id" binding:"required"`
+	SessionID string      `json:"session_id" binding:"required"`
+	Messages  []qaMessage `json:"messages" binding:"required,min=1,max=100"`
 }
 
 func (r qaStreamRequest) validate() error {
@@ -65,6 +67,9 @@ func (r qaStreamRequest) validate() error {
 		return model.ErrInvalidRequest
 	}
 	if err := validateMemoryPathID(r.UserID); err != nil {
+		return model.ErrInvalidRequest
+	}
+	if err := validateSessionID(r.SessionID); err != nil {
 		return model.ErrInvalidRequest
 	}
 	if len(r.Messages) == 0 {

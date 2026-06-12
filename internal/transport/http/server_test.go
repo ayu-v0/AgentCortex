@@ -59,6 +59,29 @@ func (f *fakeStreamer) Stream(context.Context, model.Request) (<-chan model.Stre
 	return events, nil
 }
 
+type recordingConversationRecorder struct {
+	userID    string
+	agentID   string
+	sessionID string
+	question  string
+	answer    string
+	calls     int
+	err       error
+}
+
+func (r *recordingConversationRecorder) AppendCompletedTurn(userID, agentID, sessionID, question, answer string) error {
+	r.calls++
+	r.userID = userID
+	r.agentID = agentID
+	r.sessionID = sessionID
+	r.question = question
+	r.answer = answer
+	if r.err != nil {
+		return r.err
+	}
+	return nil
+}
+
 type failingBackend struct{}
 
 func (b *failingBackend) Close() error {
@@ -426,7 +449,7 @@ func TestCreateMemorySplitsDifferentUTCDates(t *testing.T) {
 func TestSearchMemoryRejectsLimitAboveMaximum(t *testing.T) {
 	server := newTestServer(t, &failingBackend{})
 
-	body := `{"agent_id":"agent-1","user_id":"user-1","question":"question","limit":101}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","question":"question","limit":101}`
 	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
 
 	if recorder.Code != stdhttp.StatusBadRequest {
@@ -437,7 +460,7 @@ func TestSearchMemoryRejectsLimitAboveMaximum(t *testing.T) {
 func TestSearchMemoryRejectsExplicitZeroLimit(t *testing.T) {
 	server := newTestServer(t, &failingBackend{})
 
-	body := `{"agent_id":"agent-1","user_id":"user-1","question":"question","limit":0}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","question":"question","limit":0}`
 	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
 
 	if recorder.Code != stdhttp.StatusBadRequest {
@@ -448,7 +471,29 @@ func TestSearchMemoryRejectsExplicitZeroLimit(t *testing.T) {
 func TestSearchMemoryRejectsMissingQuestion(t *testing.T) {
 	server := newTestServer(t, &failingBackend{})
 
-	body := `{"agent_id":"agent-1","user_id":"user-1"}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1"}`
+	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
+
+	if recorder.Code != stdhttp.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", recorder.Code)
+	}
+}
+
+func TestSearchMemoryRejectsMissingSessionID(t *testing.T) {
+	server := newTestServer(t, &failingBackend{})
+
+	body := `{"agent_id":"agent-1","user_id":"user-1","question":"question"}`
+	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
+
+	if recorder.Code != stdhttp.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", recorder.Code)
+	}
+}
+
+func TestSearchMemoryRejectsInvalidSessionID(t *testing.T) {
+	server := newTestServer(t, &failingBackend{})
+
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session 1","question":"question"}`
 	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
 
 	if recorder.Code != stdhttp.StatusBadRequest {
@@ -466,7 +511,7 @@ func TestSearchMemoryEmbedsQuestionAndForwardsRequest(t *testing.T) {
 	})
 	server := newTestServerWithMarkdownDirAndEmbedder(t, backend, markdownDir, embedder)
 
-	body := `{"agent_id":"agent-1","user_id":"user-1","question":"where is it?"}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","question":"where is it?"}`
 	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
 
 	if recorder.Code != stdhttp.StatusOK {
@@ -505,7 +550,7 @@ func TestSearchMemoryReplacesDatabaseContentFromMarkdownEntry(t *testing.T) {
 	writeTestMemoryMarkdown(t, markdownDir, memory.Memory{ID: "memory-2", UserID: "user-1", AgentID: "agent-1", Question: "second question", Answer: "second answer", RecordedAt: recordedAt})
 	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
 
-	body := `{"agent_id":"agent-1","user_id":"user-1","question":"question","limit":2}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","question":"question","limit":2}`
 	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
 
 	if recorder.Code != stdhttp.StatusOK {
@@ -536,7 +581,7 @@ func TestSearchMemoryReadsCandidatesAcrossDailyFiles(t *testing.T) {
 	writeTestMemoryMarkdown(t, markdownDir, memory.Memory{ID: "memory-2", UserID: "user-1", AgentID: "agent-1", Question: "second", Answer: "answer", RecordedAt: secondDate})
 	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
 
-	recorder := performRequest(server, "POST", "/api/v1/memories/search", `{"agent_id":"agent-1","user_id":"user-1","question":"question","limit":2}`)
+	recorder := performRequest(server, "POST", "/api/v1/memories/search", `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","question":"question","limit":2}`)
 	if recorder.Code != stdhttp.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
 	}
@@ -552,7 +597,7 @@ func TestSearchMemoryReturnsEmptyResultsWithoutReadingMarkdown(t *testing.T) {
 	backend := &recordingBackend{searchResults: []memory.SearchResult{}}
 	server := newTestServer(t, backend)
 
-	body := `{"agent_id":"agent-1","user_id":"user-1","question":"question"}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","question":"question"}`
 	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
 
 	if recorder.Code != stdhttp.StatusOK {
@@ -567,7 +612,7 @@ func TestSearchMemoryMasksMissingMarkdownFile(t *testing.T) {
 	backend := &recordingBackend{}
 	server := newTestServer(t, backend)
 
-	body := `{"agent_id":"agent-1","user_id":"user-1","question":"question"}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","question":"question"}`
 	recorder := performRequest(server, "POST", "/api/v1/memories/search", body)
 
 	if recorder.Code != stdhttp.StatusInternalServerError {
@@ -588,7 +633,7 @@ func TestSearchMemoryFailsWholeRequestWhenOneEntryIsMissing(t *testing.T) {
 	writeTestMemoryMarkdown(t, markdownDir, memory.Memory{ID: "memory-1", UserID: "user-1", AgentID: "agent-1", Question: "question", Answer: "answer", RecordedAt: recordedAt})
 	server := newTestServerWithMarkdownDir(t, backend, markdownDir)
 
-	recorder := performRequest(server, "POST", "/api/v1/memories/search", `{"agent_id":"agent-1","user_id":"user-1","question":"question","limit":2}`)
+	recorder := performRequest(server, "POST", "/api/v1/memories/search", `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","question":"question","limit":2}`)
 	if recorder.Code != stdhttp.StatusInternalServerError {
 		t.Fatalf("expected status 500, got %d: %s", recorder.Code, recorder.Body.String())
 	}
@@ -603,7 +648,7 @@ func TestQAStreamReturnsTextDeltasAndPersistsMemory(t *testing.T) {
 		},
 	})
 
-	body := `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"user","content":"question"}]}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","messages":[{"role":"user","content":"question"}]}`
 	recorder := performRequest(server, "POST", "/api/v1/qa/stream", body)
 
 	if recorder.Code != stdhttp.StatusOK {
@@ -625,6 +670,66 @@ func TestQAStreamReturnsTextDeltasAndPersistsMemory(t *testing.T) {
 	}
 	if backend.saved.Question != "question" || backend.saved.Answer != "hello world" {
 		t.Fatalf("expected saved memory question/answer, got %#v", backend.saved)
+	}
+}
+
+func TestQAStreamRejectsMissingSessionID(t *testing.T) {
+	server := newTestServerWithMarkdownDirAndDependencies(t, &recordingBackend{}, t.TempDir(), &fakeEmbedder{}, &fakeStreamer{})
+
+	body := `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"user","content":"question"}]}`
+	recorder := performRequest(server, "POST", "/api/v1/qa/stream", body)
+
+	if recorder.Code != stdhttp.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", recorder.Code)
+	}
+}
+
+func TestQAStreamPersistsCompletedConversationTurn(t *testing.T) {
+	conversations := &recordingConversationRecorder{}
+	backend := &recordingBackend{}
+	server := newTestServerWithConversation(t, backend, t.TempDir(), &fakeEmbedder{}, &fakeStreamer{
+		events: []model.StreamEvent{{TextDelta: "answer", FinishReason: "stop"}},
+	}, conversations)
+
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","messages":[{"role":"user","content":"question"}]}`
+	recorder := performRequest(server, "POST", "/api/v1/qa/stream", body)
+
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	if conversations.calls != 1 {
+		t.Fatalf("expected one conversation write, got %d", conversations.calls)
+	}
+	if conversations.userID != "user-1" || conversations.agentID != "agent-1" || conversations.sessionID != "session-1" {
+		t.Fatalf("unexpected conversation scope: %#v", conversations)
+	}
+	if conversations.question != "question" || conversations.answer != "answer" {
+		t.Fatalf("unexpected conversation turn: %#v", conversations)
+	}
+	if backend.saved.Question != "question" || backend.saved.Answer != "answer" {
+		t.Fatalf("expected long-term memory save to continue, got %#v", backend.saved)
+	}
+}
+
+func TestQAStreamConversationFailureWarnsAndDoesNotBlockMemorySave(t *testing.T) {
+	conversations := &recordingConversationRecorder{err: errors.New("database unavailable")}
+	backend := &recordingBackend{}
+	server := newTestServerWithConversation(t, backend, t.TempDir(), &fakeEmbedder{}, &fakeStreamer{
+		events: []model.StreamEvent{{TextDelta: "answer", FinishReason: "stop"}},
+	}, conversations)
+
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","messages":[{"role":"user","content":"question"}]}`
+	recorder := performRequest(server, "POST", "/api/v1/qa/stream", body)
+
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	response := recorder.Body.String()
+	if !strings.Contains(response, `event: warning`) || !strings.Contains(response, `conversation history save failed`) {
+		t.Fatalf("expected generic conversation warning, got %s", response)
+	}
+	if backend.saved.Question != "question" || backend.saved.Answer != "answer" {
+		t.Fatalf("expected memory save after conversation failure, got %#v", backend.saved)
 	}
 }
 
@@ -707,7 +812,7 @@ func TestQAStreamReportsMarkdownSyncedWhenSQLiteSaveFails(t *testing.T) {
 		events: []model.StreamEvent{{TextDelta: "answer", FinishReason: "stop"}},
 	})
 
-	recorder := performRequest(server, "POST", "/api/v1/qa/stream", `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"user","content":"question"}]}`)
+	recorder := performRequest(server, "POST", "/api/v1/qa/stream", `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","messages":[{"role":"user","content":"question"}]}`)
 	if recorder.Code != stdhttp.StatusOK {
 		t.Fatalf("expected status 200, got %d", recorder.Code)
 	}
@@ -730,7 +835,7 @@ func TestQAStreamReportsMarkdownFailureWithoutSavingDatabase(t *testing.T) {
 		events: []model.StreamEvent{{TextDelta: "answer", FinishReason: "stop"}},
 	})
 
-	recorder := performRequest(server, "POST", "/api/v1/qa/stream", `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"user","content":"question"}]}`)
+	recorder := performRequest(server, "POST", "/api/v1/qa/stream", `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","messages":[{"role":"user","content":"question"}]}`)
 	if recorder.Code != stdhttp.StatusOK {
 		t.Fatalf("expected status 200, got %d", recorder.Code)
 	}
@@ -751,7 +856,7 @@ func TestQAStreamReturnsWarningWhenEmbeddingFails(t *testing.T) {
 		events: []model.StreamEvent{{TextDelta: "answer", FinishReason: "stop"}},
 	})
 
-	body := `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"user","content":"question"}]}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","messages":[{"role":"user","content":"question"}]}`
 	recorder := performRequest(server, "POST", "/api/v1/qa/stream", body)
 
 	if recorder.Code != stdhttp.StatusOK {
@@ -772,7 +877,7 @@ func TestQAStreamReturnsWarningWhenEmbeddingFails(t *testing.T) {
 func TestQAStreamRejectsMissingLastUserMessage(t *testing.T) {
 	server := newTestServerWithMarkdownDirAndDependencies(t, &recordingBackend{}, t.TempDir(), &fakeEmbedder{}, &fakeStreamer{})
 
-	body := `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"assistant","content":"question"}]}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","messages":[{"role":"assistant","content":"question"}]}`
 	recorder := performRequest(server, "POST", "/api/v1/qa/stream", body)
 
 	if recorder.Code != stdhttp.StatusBadRequest {
@@ -785,7 +890,7 @@ func TestQAStreamReturnsErrorEventOnModelStreamFailure(t *testing.T) {
 		events: []model.StreamEvent{{Err: errors.New("boom")}},
 	})
 
-	body := `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"user","content":"question"}]}`
+	body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","messages":[{"role":"user","content":"question"}]}`
 	recorder := performRequest(server, "POST", "/api/v1/qa/stream", body)
 
 	if recorder.Code != stdhttp.StatusOK {
@@ -821,7 +926,7 @@ func TestQAStreamEmitsHeartbeatDuringLongRunningStream(t *testing.T) {
 
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		body := `{"agent_id":"agent-1","user_id":"user-1","messages":[{"role":"user","content":"question"}]}`
+		body := `{"agent_id":"agent-1","user_id":"user-1","session_id":"session-1","messages":[{"role":"user","content":"question"}]}`
 		done <- performRequest(server, "POST", "/api/v1/qa/stream", body)
 	}()
 
@@ -903,11 +1008,17 @@ func newTestServerWithMarkdownDirAndEmbedder(t *testing.T, backend memory.Backen
 func newTestServerWithMarkdownDirAndDependencies(t *testing.T, backend memory.Backend, markdownDir string, embedder embedding.Embedder, streamer model.Streamer) *Server {
 	t.Helper()
 
+	return newTestServerWithConversation(t, backend, markdownDir, embedder, streamer, nil)
+}
+
+func newTestServerWithConversation(t *testing.T, backend memory.Backend, markdownDir string, embedder embedding.Embedder, streamer model.Streamer, conversations conversationRecorder) *Server {
+	t.Helper()
+
 	service, err := memory.NewService(backend)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
-	return newServer(service, embedder, streamer, markdownDir)
+	return newServer(service, embedder, streamer, nil, conversations, markdownDir)
 }
 
 func performRequest(server *Server, method, path, body string) *httptest.ResponseRecorder {

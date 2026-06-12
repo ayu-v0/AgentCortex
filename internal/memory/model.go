@@ -23,6 +23,19 @@ type SearchResult struct {
 	RecordedAt time.Time `json:"-"`
 }
 
+type VectorSearchResult struct {
+	ID       string
+	Distance float64
+}
+
+type Metadata struct {
+	ID             string
+	UserID         string
+	AgentID        string
+	RecordedAt     time.Time
+	StorageVersion int
+}
+
 func SameContent(left, right Memory) bool {
 	return left.ID == right.ID &&
 		left.AgentID == right.AgentID &&

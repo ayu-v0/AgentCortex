@@ -17,6 +17,11 @@ func TestFromEnvReadsConfig(t *testing.T) {
 	t.Setenv("AGENT_ID", "agent-1")
 	t.Setenv("USER_ID", "user-1")
 	t.Setenv("SYSTEM_PROMPT", "be concise")
+	t.Setenv("RECENT_SESSION_TURN_LIMIT", "7")
+	t.Setenv("CONVERSATION_RETENTION_DAYS", "14")
+	t.Setenv("CONVERSATION_CLEANUP_ENABLED", "false")
+	t.Setenv("CONVERSATION_CLEANUP_TIME", "04:30")
+	t.Setenv("CONVERSATION_CLEANUP_TIMEZONE", "UTC")
 
 	cfg := FromEnv()
 
@@ -47,6 +52,21 @@ func TestFromEnvReadsConfig(t *testing.T) {
 	if cfg.SystemPrompt != "be concise" {
 		t.Fatalf("expected system prompt, got %q", cfg.SystemPrompt)
 	}
+	if cfg.RecentTurnLimit != "7" {
+		t.Fatalf("expected recent turn limit, got %q", cfg.RecentTurnLimit)
+	}
+	if cfg.RetentionDays != "14" {
+		t.Fatalf("expected retention days, got %q", cfg.RetentionDays)
+	}
+	if cfg.CleanupEnabled != "false" {
+		t.Fatalf("expected cleanup enabled, got %q", cfg.CleanupEnabled)
+	}
+	if cfg.CleanupTime != "04:30" {
+		t.Fatalf("expected cleanup time, got %q", cfg.CleanupTime)
+	}
+	if cfg.CleanupTimezone != "UTC" {
+		t.Fatalf("expected cleanup timezone, got %q", cfg.CleanupTimezone)
+	}
 }
 
 func TestFromEnvDefaultsConfig(t *testing.T) {
@@ -64,11 +84,20 @@ func TestFromEnvDefaultsConfig(t *testing.T) {
 	if cfg.ModelName != "" {
 		t.Fatalf("expected empty model name by default, got %q", cfg.ModelName)
 	}
-	if cfg.ModelTimeout != "30s" {
-		t.Fatalf("expected default model timeout 30s, got %q", cfg.ModelTimeout)
+	if cfg.ModelTimeout != "300s" {
+		t.Fatalf("expected default model timeout 300s, got %q", cfg.ModelTimeout)
 	}
 	if cfg.ServerEndpoint != defaultServerEndpoint {
 		t.Fatalf("expected default server endpoint, got %q", cfg.ServerEndpoint)
+	}
+	if cfg.RecentTurnLimit != defaultRecentTurnLimit {
+		t.Fatalf("expected default recent turn limit, got %q", cfg.RecentTurnLimit)
+	}
+	if cfg.RetentionDays != defaultRetentionDays {
+		t.Fatalf("expected default retention days, got %q", cfg.RetentionDays)
+	}
+	if cfg.CleanupEnabled != defaultCleanupEnabled {
+		t.Fatalf("expected default cleanup enabled, got %q", cfg.CleanupEnabled)
 	}
 }
 

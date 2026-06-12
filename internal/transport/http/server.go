@@ -6,6 +6,7 @@ import (
 	"github.com/ayu-v0/agent-cortex/internal/embedding"
 	"github.com/ayu-v0/agent-cortex/internal/memory"
 	"github.com/ayu-v0/agent-cortex/internal/model"
+	"github.com/ayu-v0/agent-cortex/internal/retrieval"
 	"github.com/gin-gonic/gin"
 )
 
@@ -15,11 +16,15 @@ type Server struct {
 }
 
 func NewServer(service *memory.Service, embedder embedding.Embedder, streamer model.Streamer) *Server {
-	return newServer(service, embedder, streamer, defaultMemoryMarkdownDir)
+	return newServer(service, embedder, streamer, nil, nil, defaultMemoryMarkdownDir)
 }
 
-func newServer(service *memory.Service, embedder embedding.Embedder, streamer model.Streamer, memoryMarkdownDir string) *Server {
-	handlers := newHandlers(service, embedder, streamer, memoryMarkdownDir)
+func NewServerWithServices(service *memory.Service, embedder embedding.Embedder, streamer model.Streamer, retrievalService *retrieval.Service, conversationRecorder conversationRecorder) *Server {
+	return newServer(service, embedder, streamer, retrievalService, conversationRecorder, defaultMemoryMarkdownDir)
+}
+
+func newServer(service *memory.Service, embedder embedding.Embedder, streamer model.Streamer, retrievalService *retrieval.Service, conversationRecorder conversationRecorder, memoryMarkdownDir string) *Server {
+	handlers := newHandlers(service, embedder, streamer, retrievalService, conversationRecorder, memoryMarkdownDir)
 	return &Server{
 		router:   newRouter(handlers),
 		handlers: handlers,

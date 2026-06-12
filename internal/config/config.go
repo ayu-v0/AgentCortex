@@ -14,8 +14,13 @@ const (
 	defaultEmbeddingProvider = "static"
 	defaultEmbeddingEndpoint = "http://127.0.0.1:8081"
 	defaultModelProvider     = "openai-compatible"
-	defaultModelTimeout      = "30s"
+	defaultModelTimeout      = "300s"
 	defaultServerEndpoint    = "http://127.0.0.1:8080"
+	defaultRecentTurnLimit   = "5"
+	defaultRetentionDays     = "30"
+	defaultCleanupEnabled    = "true"
+	defaultCleanupTime       = "03:00"
+	defaultCleanupTimezone   = "Asia/Shanghai"
 )
 
 type Config struct {
@@ -33,6 +38,11 @@ type Config struct {
 	AgentID           string `yaml:"agent_id"`
 	UserID            string `yaml:"user_id"`
 	SystemPrompt      string `yaml:"system_prompt"`
+	RecentTurnLimit   string `yaml:"recent_session_turn_limit"`
+	RetentionDays     string `yaml:"conversation_retention_days"`
+	CleanupEnabled    string `yaml:"conversation_cleanup_enabled"`
+	CleanupTime       string `yaml:"conversation_cleanup_time"`
+	CleanupTimezone   string `yaml:"conversation_cleanup_timezone"`
 }
 
 func FromEnv() Config {
@@ -54,6 +64,11 @@ func FromEnvWithBase(base Config) Config {
 	base.AgentID = getenv("AGENT_ID", base.AgentID)
 	base.UserID = getenv("USER_ID", base.UserID)
 	base.SystemPrompt = getenv("SYSTEM_PROMPT", base.SystemPrompt)
+	base.RecentTurnLimit = getenv("RECENT_SESSION_TURN_LIMIT", base.RecentTurnLimit)
+	base.RetentionDays = getenv("CONVERSATION_RETENTION_DAYS", base.RetentionDays)
+	base.CleanupEnabled = getenv("CONVERSATION_CLEANUP_ENABLED", base.CleanupEnabled)
+	base.CleanupTime = getenv("CONVERSATION_CLEANUP_TIME", base.CleanupTime)
+	base.CleanupTimezone = getenv("CONVERSATION_CLEANUP_TIMEZONE", base.CleanupTimezone)
 	return base
 }
 
@@ -112,6 +127,11 @@ func Default() Config {
 		AgentID:           "",
 		UserID:            "",
 		SystemPrompt:      "",
+		RecentTurnLimit:   defaultRecentTurnLimit,
+		RetentionDays:     defaultRetentionDays,
+		CleanupEnabled:    defaultCleanupEnabled,
+		CleanupTime:       defaultCleanupTime,
+		CleanupTimezone:   defaultCleanupTimezone,
 	}
 }
 

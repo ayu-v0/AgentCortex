@@ -26,9 +26,10 @@ type Message struct {
 }
 
 type QARequest struct {
-	AgentID  string    `json:"agent_id"`
-	UserID   string    `json:"user_id"`
-	Messages []Message `json:"messages"`
+	AgentID   string    `json:"agent_id"`
+	UserID    string    `json:"user_id"`
+	SessionID string    `json:"session_id"`
+	Messages  []Message `json:"messages"`
 }
 
 type QAEvent struct {

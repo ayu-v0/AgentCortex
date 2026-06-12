@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/ayu-v0/agent-cortex/internal/cli/client"
 	"github.com/ayu-v0/agent-cortex/internal/config"
@@ -24,7 +26,10 @@ type App struct {
 	qaClient     client.QAClient
 	io           TerminalIO
 	conversation *Conversation
+	sessionID    string
 }
+
+var sessionIDSequence atomic.Uint64
 
 func RunWithConfigPath(configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -70,6 +75,7 @@ func NewApp(cfg config.Config, dependencies Dependencies, io TerminalIO) (*App, 
 		qaClient:     dependencies.QAClient,
 		io:           io,
 		conversation: NewConversation(strings.TrimSpace(cfg.SystemPrompt)),
+		sessionID:    newSessionID(),
 	}, nil
 }
 
@@ -112,6 +118,7 @@ func (a *App) handleLine(ctx context.Context, line string) (bool, error) {
 		return true, nil
 	case "clear":
 		a.conversation.Clear(strings.TrimSpace(a.cfg.SystemPrompt))
+		a.sessionID = newSessionID()
 		return false, a.io.WriteLine("[context cleared]")
 	}
 
@@ -129,9 +136,10 @@ func (a *App) handleLine(ctx context.Context, line string) (bool, error) {
 
 func (a *App) answer(ctx context.Context, question string) (string, error) {
 	req := client.QARequest{
-		AgentID:  a.cfg.AgentID,
-		UserID:   a.cfg.UserID,
-		Messages: conversationToClientMessages(a.conversation.MessagesWithUser(question)),
+		AgentID:   a.cfg.AgentID,
+		UserID:    a.cfg.UserID,
+		SessionID: a.sessionID,
+		Messages:  conversationToClientMessages(a.conversation.MessagesWithUser(question)),
 	}
 	events, err := a.qaClient.StreamQA(ctx, req)
 	if err != nil {
@@ -169,6 +177,10 @@ func (a *App) answer(ctx context.Context, question string) (string, error) {
 		return "", errors.New("qa stream ended without finished event")
 	}
 	return builder.String(), nil
+}
+
+func newSessionID() string {
+	return fmt.Sprintf("session-%d-%d", time.Now().UnixNano(), sessionIDSequence.Add(1))
 }
 
 func conversationToClientMessages(messages []model.Message) []client.Message {

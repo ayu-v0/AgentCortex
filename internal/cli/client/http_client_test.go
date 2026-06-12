@@ -31,8 +31,9 @@ func TestHTTPQAClientParsesSSEEvents(t *testing.T) {
 	}
 
 	events, err := client.StreamQA(context.Background(), QARequest{
-		AgentID: "agent-1",
-		UserID:  "user-1",
+		AgentID:   "agent-1",
+		UserID:    "user-1",
+		SessionID: "session-1",
 		Messages: []Message{
 			{Role: "user", Content: "question"},
 		},
@@ -72,8 +73,9 @@ func TestHTTPQAClientIgnoresHeartbeat(t *testing.T) {
 	}
 
 	events, err := client.StreamQA(context.Background(), QARequest{
-		AgentID: "agent-1",
-		UserID:  "user-1",
+		AgentID:   "agent-1",
+		UserID:    "user-1",
+		SessionID: "session-1",
 		Messages: []Message{
 			{Role: "user", Content: "question"},
 		},
@@ -125,8 +127,9 @@ func TestHTTPQAClientReturnsDecodeErrorsForInvalidEvents(t *testing.T) {
 	}
 
 	events, err := client.StreamQA(context.Background(), QARequest{
-		AgentID: "agent-1",
-		UserID:  "user-1",
+		AgentID:   "agent-1",
+		UserID:    "user-1",
+		SessionID: "session-1",
 		Messages: []Message{
 			{Role: "user", Content: "question"},
 		},
@@ -158,8 +161,9 @@ func TestHTTPQAClientReturnsUnknownEventErrors(t *testing.T) {
 	}
 
 	events, err := client.StreamQA(context.Background(), QARequest{
-		AgentID: "agent-1",
-		UserID:  "user-1",
+		AgentID:   "agent-1",
+		UserID:    "user-1",
+		SessionID: "session-1",
 		Messages: []Message{
 			{Role: "user", Content: "question"},
 		},
@@ -198,8 +202,9 @@ func TestHTTPQAClientStopsOnContextCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	events, err := client.StreamQA(ctx, QARequest{
-		AgentID: "agent-1",
-		UserID:  "user-1",
+		AgentID:   "agent-1",
+		UserID:    "user-1",
+		SessionID: "session-1",
 		Messages: []Message{
 			{Role: "user", Content: "question"},
 		},
@@ -237,8 +242,9 @@ func TestHTTPQAClientParsesMultiLineDataEvent(t *testing.T) {
 	}
 
 	events, err := client.StreamQA(context.Background(), QARequest{
-		AgentID: "agent-1",
-		UserID:  "user-1",
+		AgentID:   "agent-1",
+		UserID:    "user-1",
+		SessionID: "session-1",
 		Messages: []Message{
 			{Role: "user", Content: "question"},
 		},

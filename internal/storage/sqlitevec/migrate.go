@@ -7,7 +7,11 @@ func (b *Backend) migrate() error {
 	if err := b.ensureMemoryColumns(); err != nil {
 		return err
 	}
-	return b.ensureMemoryVectorSchema()
+	if err := b.ensureMemoryVectorSchema(); err != nil {
+		return err
+	}
+	_, err := b.db.Exec(conversationSchemaSQL)
+	return err
 }
 
 func (b *Backend) ensureMemoryColumns() error {

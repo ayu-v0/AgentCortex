@@ -3,6 +3,7 @@ package sqlitevec
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/ayu-v0/agent-cortex/internal/memory"
@@ -99,4 +100,47 @@ func (s *MemoryStore) FindByID(id string) (memory.Memory, bool, error) {
 		item.RecordedAt = parsed.UTC()
 	}
 	return item, true, nil
+}
+
+func (s *MemoryStore) FindMetadataByIDs(ids []string) (map[string]memory.Metadata, error) {
+	if len(ids) == 0 {
+		return map[string]memory.Metadata{}, nil
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, user_id, agent_id, recorded_at, storage_version
+		FROM memories
+		WHERE id IN (`+strings.Join(placeholders, ",")+`)
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	metadata := make(map[string]memory.Metadata, len(ids))
+	for rows.Next() {
+		var (
+			item       memory.Metadata
+			recordedAt string
+		)
+		if err := rows.Scan(&item.ID, &item.UserID, &item.AgentID, &recordedAt, &item.StorageVersion); err != nil {
+			return nil, err
+		}
+		if recordedAt != "" {
+			parsed, err := time.Parse(time.RFC3339, recordedAt)
+			if err != nil {
+				return nil, err
+			}
+			item.RecordedAt = parsed.UTC()
+		}
+		metadata[item.ID] = item
+	}
+	return metadata, rows.Err()
 }

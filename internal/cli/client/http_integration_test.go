@@ -86,8 +86,9 @@ func TestHTTPQAClientWorksAgainstRealAgentCortexServer(t *testing.T) {
 	}
 
 	events, err := client.StreamQA(context.Background(), clientpkg.QARequest{
-		AgentID: "agent-1",
-		UserID:  "user-1",
+		AgentID:   "agent-1",
+		UserID:    "user-1",
+		SessionID: "session-1",
 		Messages: []clientpkg.Message{
 			{Role: "user", Content: "question"},
 		},
@@ -135,8 +136,9 @@ func TestHTTPQAClientReceivesWarningFromRealAgentCortexServer(t *testing.T) {
 	}
 
 	events, err := client.StreamQA(context.Background(), clientpkg.QARequest{
-		AgentID: "agent-1",
-		UserID:  "user-1",
+		AgentID:   "agent-1",
+		UserID:    "user-1",
+		SessionID: "session-1",
 		Messages: []clientpkg.Message{
 			{Role: "user", Content: "question"},
 		},
@@ -186,10 +188,11 @@ func TestHTTPQAClientIgnoresHeartbeatFromRealAgentCortexServer(t *testing.T) {
 
 	done := make(chan []clientpkg.QAEvent, 1)
 	go func() {
-		events, err := client.StreamQA(context.Background(), clientpkg.QARequest{
-			AgentID: "agent-1",
-			UserID:  "user-1",
-			Messages: []clientpkg.Message{
+	events, err := client.StreamQA(context.Background(), clientpkg.QARequest{
+		AgentID:   "agent-1",
+		UserID:    "user-1",
+		SessionID: "session-1",
+		Messages: []clientpkg.Message{
 				{Role: "user", Content: "question"},
 			},
 		})

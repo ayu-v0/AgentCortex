@@ -32,11 +32,13 @@ func (f *fakeTerminalIO) WriteLine(text string) error {
 }
 
 type fakeQAClient struct {
-	events []client.QAEvent
-	err    error
+	events   []client.QAEvent
+	err      error
+	requests []client.QARequest
 }
 
 func (f *fakeQAClient) StreamQA(ctx context.Context, req client.QARequest) (<-chan client.QAEvent, error) {
+	f.requests = append(f.requests, req)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -56,18 +58,17 @@ func (f *fakeQAClient) StreamQA(ctx context.Context, req client.QARequest) (<-ch
 
 func TestHandleLineSuccessfulTurnAddsConversationAfterFinished(t *testing.T) {
 	io := &fakeTerminalIO{}
+	qaClient := &fakeQAClient{events: []client.QAEvent{
+		{Type: client.EventTextDelta, TextDelta: "hello"},
+		{Type: client.EventTextDelta, TextDelta: " world"},
+		{Type: client.EventFinished, Answer: "hello world"},
+	}}
 	app, err := NewApp(config.Config{
 		AgentID:        "agent-1",
 		UserID:         "user-1",
 		ServerEndpoint: "http://127.0.0.1:8080",
 		SystemPrompt:   "be concise",
-	}, Dependencies{
-		QAClient: &fakeQAClient{events: []client.QAEvent{
-			{Type: client.EventTextDelta, TextDelta: "hello"},
-			{Type: client.EventTextDelta, TextDelta: " world"},
-			{Type: client.EventFinished, Answer: "hello world"},
-		}},
-	}, io)
+	}, Dependencies{QAClient: qaClient}, io)
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
@@ -84,6 +85,12 @@ func TestHandleLineSuccessfulTurnAddsConversationAfterFinished(t *testing.T) {
 	}
 	if len(app.conversation.Messages()) != 3 {
 		t.Fatalf("expected system + turn messages, got %d", len(app.conversation.Messages()))
+	}
+	if len(qaClient.requests) != 1 {
+		t.Fatalf("expected one request, got %d", len(qaClient.requests))
+	}
+	if strings.TrimSpace(qaClient.requests[0].SessionID) == "" {
+		t.Fatal("expected generated session ID")
 	}
 }
 
@@ -179,14 +186,13 @@ func TestHandleLineWithoutFinishedDoesNotMutateConversation(t *testing.T) {
 
 func TestHandleLineClearResetsConversation(t *testing.T) {
 	io := &fakeTerminalIO{}
+	qaClient := &fakeQAClient{events: []client.QAEvent{{Type: client.EventFinished, Answer: "answer"}}}
 	app, err := NewApp(config.Config{
 		AgentID:        "agent-1",
 		UserID:         "user-1",
 		ServerEndpoint: "http://127.0.0.1:8080",
 		SystemPrompt:   "be concise",
-	}, Dependencies{
-		QAClient: &fakeQAClient{events: []client.QAEvent{{Type: client.EventFinished, Answer: "answer"}}},
-	}, io)
+	}, Dependencies{QAClient: qaClient}, io)
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
@@ -207,5 +213,47 @@ func TestHandleLineClearResetsConversation(t *testing.T) {
 	}
 	if len(app.conversation.Messages()) != 1 {
 		t.Fatalf("expected only system prompt after clear, got %d messages", len(app.conversation.Messages()))
+	}
+	if _, err := app.handleLine(context.Background(), "another question"); err != nil {
+		t.Fatalf("handle second question: %v", err)
+	}
+	if len(qaClient.requests) != 2 {
+		t.Fatalf("expected two requests, got %d", len(qaClient.requests))
+	}
+	if qaClient.requests[0].SessionID == "" || qaClient.requests[1].SessionID == "" {
+		t.Fatalf("expected generated session IDs, got %#v", qaClient.requests)
+	}
+	if qaClient.requests[0].SessionID == qaClient.requests[1].SessionID {
+		t.Fatalf("expected clear to reset session ID, got %q", qaClient.requests[0].SessionID)
+	}
+}
+
+func TestHandleLineReusesSessionIDWithinInteractiveRun(t *testing.T) {
+	io := &fakeTerminalIO{}
+	qaClient := &fakeQAClient{events: []client.QAEvent{{Type: client.EventFinished, Answer: "answer"}}}
+	app, err := NewApp(config.Config{
+		AgentID:        "agent-1",
+		UserID:         "user-1",
+		ServerEndpoint: "http://127.0.0.1:8080",
+	}, Dependencies{QAClient: qaClient}, io)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	if _, err := app.handleLine(context.Background(), "first question"); err != nil {
+		t.Fatalf("handle first question: %v", err)
+	}
+	if _, err := app.handleLine(context.Background(), "second question"); err != nil {
+		t.Fatalf("handle second question: %v", err)
+	}
+
+	if len(qaClient.requests) != 2 {
+		t.Fatalf("expected two requests, got %d", len(qaClient.requests))
+	}
+	if qaClient.requests[0].SessionID == "" {
+		t.Fatal("expected generated session ID")
+	}
+	if qaClient.requests[0].SessionID != qaClient.requests[1].SessionID {
+		t.Fatalf("expected session ID reuse, got %q then %q", qaClient.requests[0].SessionID, qaClient.requests[1].SessionID)
 	}
 }
