@@ -2,7 +2,6 @@ package embedding
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
@@ -49,7 +48,7 @@ func NewProviderWithContext(ctx context.Context, config Config) (Embedder, error
 		config.Provider = defaultProvider
 	}
 	if config.Dimensions <= 0 {
-		return nil, fmt.Errorf("%w: dimensions must be positive", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 
 	switch config.Provider {
@@ -61,6 +60,6 @@ func NewProviderWithContext(ctx context.Context, config Config) (Embedder, error
 		}
 		return NewLlamaCPPEmbedder(config)
 	default:
-		return nil, fmt.Errorf("%w: %s", ErrUnknownProvider, config.Provider)
+		return nil, ErrUnknownProvider
 	}
 }

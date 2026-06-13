@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,20 +68,20 @@ func AppendMarkdownFile(dir, filename, content string) (string, error) {
 func markdownFilePath(dir, filename string) (string, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
-		return "", fmt.Errorf("markdown directory is required")
+		return "", ErrMarkdownDirectoryRequired
 	}
 
 	filename = strings.TrimSpace(filename)
 	if filename == "" {
-		return "", fmt.Errorf("markdown filename is required")
+		return "", ErrMarkdownFilenameRequired
 	}
 	if filepath.Base(filename) != filename {
-		return "", fmt.Errorf("markdown filename must not include path separators")
+		return "", ErrMarkdownFilenameHasPath
 	}
 
 	extension := strings.ToLower(filepath.Ext(filename))
 	if extension != ".md" && extension != ".markdown" {
-		return "", fmt.Errorf("markdown filename must end with .md or .markdown")
+		return "", ErrMarkdownFilenameExtension
 	}
 
 	return filepath.Join(dir, filename), nil

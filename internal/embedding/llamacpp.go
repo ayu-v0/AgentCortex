@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -24,11 +24,11 @@ var _ Embedder = (*LlamaCPPEmbedder)(nil)
 
 func NewLlamaCPPEmbedder(config Config) (*LlamaCPPEmbedder, error) {
 	if config.Dimensions <= 0 {
-		return nil, fmt.Errorf("%w: dimensions must be positive", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 	endpoint := strings.TrimRight(strings.TrimSpace(config.Endpoint), "/")
 	if endpoint == "" {
-		return nil, fmt.Errorf("%w: endpoint is required", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 
 	model := strings.TrimSpace(config.Model)
@@ -64,12 +64,12 @@ func (e *LlamaCPPEmbedder) Embed(ctx context.Context, input Input) (Vector, erro
 		Input: text,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: encode request: %v", ErrProviderUnavailable, err)
+		return nil, errors.Join(ErrProviderUnavailable, err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.endpoint+"/v1/embeddings", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("%w: create request: %v", ErrProviderUnavailable, err)
+		return nil, errors.Join(ErrProviderUnavailable, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if e.apiKey != "" {
@@ -81,20 +81,20 @@ func (e *LlamaCPPEmbedder) Embed(ctx context.Context, input Input) (Vector, erro
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		return nil, fmt.Errorf("%w: request failed: %v", ErrProviderUnavailable, err)
+		return nil, errors.Join(ErrProviderUnavailable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("%w: status %d", ErrProviderUnavailable, resp.StatusCode)
+		return nil, ErrProviderUnavailable
 	}
 
 	var decoded llamaCPPEmbeddingResponse
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return nil, fmt.Errorf("%w: decode response: %v", ErrProviderUnavailable, err)
+		return nil, errors.Join(ErrProviderUnavailable, err)
 	}
 	if len(decoded.Data) == 0 || len(decoded.Data[0].Embedding) == 0 {
-		return nil, fmt.Errorf("%w: response missing embedding", ErrProviderUnavailable)
+		return nil, ErrProviderUnavailable
 	}
 
 	vector := Vector(decoded.Data[0].Embedding)

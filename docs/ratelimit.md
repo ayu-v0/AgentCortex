@@ -101,7 +101,7 @@ if err != nil {
 	return err
 }
 if !decision.Allowed {
-	return fmt.Errorf("rate limited, retry after %s", decision.RetryAfter)
+	return ratelimit.ErrLimitStateFull
 }
 ```
 

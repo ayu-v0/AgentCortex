@@ -2,7 +2,6 @@ package ratelimit
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"time"
 
@@ -28,10 +27,10 @@ type tokenBucketState struct {
 // NewTokenBucket returns a keyed token bucket limiter.
 func NewTokenBucket(config Config) (Limiter, error) {
 	if config.Rate <= 0 {
-		return nil, fmt.Errorf("%w: rate must be positive", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 	if config.Burst <= 0 {
-		return nil, fmt.Errorf("%w: burst must be positive", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 
 	window := config.Window

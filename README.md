@@ -9,7 +9,49 @@ Run the Gin server:
 go run .\cmd\agent-cortex
 ```
 
+You can also load a YAML file:
+
+```powershell
+go run .\cmd\agent-cortex --config .\config.yml
+```
+
 The service listens on `:8080` by default. Set `ADDR` or `DATABASE_PATH` to override the listen address or SQLite database path.
+Set `EMBEDDING_PROVIDER` or `EMBEDDING_ENDPOINT` to override the search embedding provider or endpoint. Environment variables override values loaded from the YAML config file.
+
+Example `config.yml`:
+
+```yaml
+addr: ":8080"
+database_path: "agent_memory.db"
+storage_backend: "sqlitevec"
+embedding_provider: "static"
+embedding_endpoint: "http://127.0.0.1:8081"
+model_provider: "openai-compatible"
+model_endpoint: ""
+model_api_key: ""
+model_name: ""
+model_timeout: "30s"
+server_endpoint: "http://127.0.0.1:8080"
+```
+
+## CLI
+
+Run the interactive CLI:
+
+```powershell
+go run .\cmd\agent-cortex-cli --config .\config.yml
+```
+
+The CLI is a separate entrypoint from the HTTP server and connects to the HTTP QA server:
+
+```yaml
+server_endpoint: "http://127.0.0.1:8080"
+agent_id: "agent-cortex-cli"
+user_id: "default-user"
+system_prompt: "You are a concise assistant."
+```
+
+Each successful Q/A turn is automatically saved as memory by the server. Environment variables still override YAML values.
 
 ### Health
 
@@ -26,7 +68,9 @@ Content-Type: application/json
 {
   "id": "mem_001",
   "agent_id": "agent_001",
-  "content": "User likes building agent memory in Go.",
+  "user_id": "user_001",
+  "question": "What does the user like?",
+  "answer": "The user likes building agent memory in Go.",
   "embedding": [0.1, 0.2, 0.3, 0.4]
 }
 ```
@@ -39,7 +83,8 @@ Content-Type: application/json
 
 {
   "agent_id": "agent_001",
-  "embedding": [0.1, 0.2, 0.3, 0.4],
-  "limit": 5
+  "user_id": "user_001",
+  "question": "What does the user like?",
+  "limit": 10
 }
 ```

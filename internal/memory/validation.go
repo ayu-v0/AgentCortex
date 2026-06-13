@@ -1,24 +1,21 @@
 package memory
 
-import (
-	"fmt"
-	"math"
-)
+import "math"
 
 const EmbeddingDimensions = 4
 
 const (
-	defaultSearchLimit = 5
+	defaultSearchLimit = 10
 	MaxSearchLimit     = 100
 )
 
 func validateEmbedding(embedding []float32) error {
 	if len(embedding) != EmbeddingDimensions {
-		return fmt.Errorf("%w: got %d", ErrInvalidEmbedding, len(embedding))
+		return ErrInvalidEmbedding
 	}
-	for i, value := range embedding {
+	for _, value := range embedding {
 		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
-			return fmt.Errorf("%w: index %d", ErrInvalidEmbeddingValue, i)
+			return ErrInvalidEmbeddingValue
 		}
 	}
 	return nil

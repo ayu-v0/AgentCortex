@@ -10,6 +10,7 @@ func newRouter(handlers *handlers) *gin.Engine {
 	api := router.Group("/api/v1")
 	api.POST("/memories", handlers.createMemory)
 	api.POST("/memories/search", handlers.searchMemory)
+	api.POST("/qa/stream", handlers.qaStream)
 
 	return router
 }

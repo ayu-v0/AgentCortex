@@ -2,7 +2,6 @@ package ratelimit
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"time"
 
@@ -29,10 +28,10 @@ type gcraState struct {
 // NewGCRA returns a keyed Generic Cell Rate Algorithm limiter.
 func NewGCRA(config Config) (Limiter, error) {
 	if config.Rate <= 0 {
-		return nil, fmt.Errorf("%w: rate must be positive", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 	if config.Window <= 0 {
-		return nil, fmt.Errorf("%w: window must be positive", ErrInvalidConfig)
+		return nil, ErrInvalidConfig
 	}
 
 	burst := config.Burst
